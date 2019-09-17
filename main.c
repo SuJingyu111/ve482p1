@@ -8,7 +8,7 @@
 #define MAXCINW 256 //maximum #characters in a word
 #define MAXPIPELINE 32 // maximum #pipeline
 
-char ** parse(const char *line, int *numarg, int *numcm, int *cmpos)
+char ** parse(const char *line, char ** arg, int *numarg, int *numcm, int *cmpos)
 // REQUIRES: *numcm = *numarg = 0
 // EFFECTS: separate line into arg[] according to white space;
 //          numcm records the number of command;
@@ -20,18 +20,12 @@ char ** parse(const char *line, int *numarg, int *numcm, int *cmpos)
 
     //cmpos[0] = -1;
 
-    char **arg;
-    arg = (char **)malloc(sizeof(char *)); //first assign one argument
-    arg[0] = (char *)malloc(sizeof(char) * MAXCINW); //suppose #characters of a word will not exceed MAXCINW
-
     int i=0;
     while(i<MAXCHAC+1){
 
         while(line[i] == ' ') i++;
 
         if(line[i] == '\n') {
-            free(arg[*numarg]);
-            arg[*numarg] = NULL;
             break;
         }
 
@@ -78,6 +72,22 @@ char ** parse(const char *line, int *numarg, int *numcm, int *cmpos)
 
 }
 
+
+int runsimplecommand(char **arg)
+{
+    pid_t child;
+    int status;
+    child = fork();
+    if(child != 0){
+        wait(&status);
+    }
+    else{
+        execvp(arg[0], arg);
+    }
+    return 0;
+}
+
+
 int main() {
 
     char line[MAXCHAC+1]; //input; +1 to ensure the last element of line is '\0
@@ -95,32 +105,22 @@ int main() {
 
         if(line[0] == '\n') continue;
 
+
         int numarg = 0, numcm = 0;
         char **arg;
-        //arg = (char **)malloc(sizeof(char *)); //first assign one argument
-        //arg[0] = (char *)malloc(sizeof(char) * MAXCINW); //suppose #characters of a word will not exceed MAXCINW
+        arg = (char **)malloc(sizeof(char *)); //first assign one argument
+        arg[0] = (char *)malloc(sizeof(char) * MAXCINW); //suppose #characters of a word will not exceed MAXCINW
         int cmpos[MAXPIPELINE]; //suppose there are at most MAXPIPELINE pipelines
-        arg = parse(line, &numarg, &numcm, cmpos);
 
-        /*for(int i=0; i<numarg; i++){
-            if(arg[i]==NULL) break;
-            for(int j=0; j<MAXCHAC; j++){
-                if(!arg[i][j]) break;
-                printf("%c", arg[i][j]);
-            }
-            printf("\n");
-        }*/
+        arg = parse(line, arg, &numarg, &numcm, cmpos);
+        free(arg[numarg]);
+        arg[numarg] = NULL;
 
 
-        /*for(int i=0; i<numarg; i++){
-            if(arg[i]!= NULL){
-                for(int j=0; j<MAXCHAC; j++){
-                    if(arg[i][j]=='\0') break;
-                    printf("%c", arg[i][j]);
-                }
-                printf("\n");
-            }
-        }*/
+
+
+        runsimplecommand(arg);
+
 
 
         for(int i=0; i<numarg; i++){
