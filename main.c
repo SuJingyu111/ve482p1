@@ -4,36 +4,45 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#define MAXCHAC 1024
+#define MAXCHAC 1024 //maximum #characters in a line
+#define MAXCINW 256 //maximum #characters in a word
+#define MAXPIPELINE 32 // maximum #pipeline
 
-void parse(char *line, char **arg, int *numarg, int *numcm, int *cmpos)
+char ** parse(const char *line, int *numarg, int *numcm, int *cmpos)
 // REQUIRES: *numcm = *numarg = 0
-// EFFECTS: separate line into arg[] according to white space, deal with quotes;
+// EFFECTS: separate line into arg[] according to white space;
 //          numcm records the number of command;
 //          cmpos[a] records which argument the ath command is up to,
 //          i. e. command a is arg[cmpos[a-1]] ~ arg[cmpos[a]-1].
+//          return arg.
 //NO REDIRECTION & NO CONSIDERING INCOMPLETE QUOTES
 {
 
-    cmpos[0] = -1;
+    //cmpos[0] = -1;
 
-    for(int i=0; i<MAXCHAC; i++){
+    char **arg;
+    arg = (char **)malloc(sizeof(char *)); //first assign one argument
+    arg[0] = (char *)malloc(sizeof(char) * MAXCINW); //suppose #characters of a word will not exceed MAXCINW
+
+    int i=0;
+    while(i<MAXCHAC+1){
 
         while(line[i] == ' ') i++;
 
         if(line[i] == '\n') {
+            free(arg[*numarg]);
             arg[*numarg] = NULL;
-            return;
+            break;
         }
 
-        if(line[i] == '|'){
+        /*if(line[i] == '|'){
             (*numcm)++;
             cmpos[(*numcm)] = *numarg;
             continue;
-        }
+        }*/
 
         int j=0;
-        if(line[i] == '"') {
+        /*if(line[i] == '"') {
             i++;
             while(line[i] != '"' && line[i] != '\n') {
                 arg[*numarg][j]=line[i];
@@ -50,17 +59,23 @@ void parse(char *line, char **arg, int *numarg, int *numcm, int *cmpos)
                 i++;
             }
             i++; //skip the last "
-        }
+        }*/
 
         while(line[i] != ' ' && line[i] != '\n'){
             arg[*numarg][j]=line[i];
             j++;
             i++;
         }
+        arg[*numarg][j] = '\0';
 
-        numarg++;
+        (*numarg)++;
+        arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
+        arg[(*numarg)] = (char *)malloc(sizeof(char) * MAXCINW);
 
     }
+
+    return arg;
+
 }
 
 int main() {
@@ -81,16 +96,37 @@ int main() {
         if(line[0] == '\n') continue;
 
         int numarg = 0, numcm = 0;
-        char *arg[MAXCHAC/3];
-        int cmpos[MAXCHAC/2];
-        //parse(line, arg, &numarg, &numcm, cmpos);报错signal11 内存不对
+        char **arg;
+        //arg = (char **)malloc(sizeof(char *)); //first assign one argument
+        //arg[0] = (char *)malloc(sizeof(char) * MAXCINW); //suppose #characters of a word will not exceed MAXCINW
+        int cmpos[MAXPIPELINE]; //suppose there are at most MAXPIPELINE pipelines
+        arg = parse(line, &numarg, &numcm, cmpos);
+
         /*for(int i=0; i<numarg; i++){
+            if(arg[i]==NULL) break;
             for(int j=0; j<MAXCHAC; j++){
-                if(arg[i][j]=='\n') break;
+                if(!arg[i][j]) break;
                 printf("%c", arg[i][j]);
             }
             printf("\n");
         }*/
+
+
+        /*for(int i=0; i<numarg; i++){
+            if(arg[i]!= NULL){
+                for(int j=0; j<MAXCHAC; j++){
+                    if(arg[i][j]=='\0') break;
+                    printf("%c", arg[i][j]);
+                }
+                printf("\n");
+            }
+        }*/
+
+
+        for(int i=0; i<numarg; i++){
+            free(arg[i]);
+        }
+        free(arg);
 
     }
 
