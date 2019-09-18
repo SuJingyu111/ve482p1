@@ -9,6 +9,7 @@
 #define MAXCHAC 1024 //maximum #characters in a line
 #define MAXCINW 256 //maximum #characters in a word
 #define MAXPIPELINE 16 // maximum #pipeline
+#define MAXFILE 16 // maximum #file that may occur in a redirection
 #define MAXREDIRECTION 128 // maximum #redirection
 
 enum{ROUT, ROUTA, RIN}; // >, >>, <
@@ -28,7 +29,8 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 //NO REDIRECTION & NO CONSIDERING INCOMPLETE QUOTES
 {
 
-    //cmpos[0] = -1;
+    cmpos[0] = -1;
+    *numcm = 0; //use later
 
     int i=0;
     while(i<MAXCHAC+1){
@@ -111,31 +113,7 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 
 }
 
-
-/*int runsimplecommand(char **arg)
-{
-    pid_t child;
-    int status;
-    child = fork();
-    if(child == -1) {
-        printf("Failed to fork.\n");
-        fflush(stdout);
-        return 1;
-    }
-    if(child != 0){
-        wait(&status);
-    }
-    else{
-        if(execvp(arg[0], arg)<0){
-            printf("Cannot execute \"%s\"!\n", arg[0]);
-            fflush(stdout);
-            exit(0);
-        }
-    }
-    return 0;
-}*/
-
-int runinoutcommand(char **arg, int numrd, struct redirectsymbol *rd)
+int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd)
 {
     pid_t child;
     int status;
@@ -157,66 +135,84 @@ int runinoutcommand(char **arg, int numrd, struct redirectsymbol *rd)
             }
         }
         else{
-            for(int i = 0; i < numrd-1; i++){
-                if(rd[i].pos >= rd[i+1].pos-1 && arg[rd[i+1].pos][0] == '\0'){
+            struct redirectsymbol last;
+            last.symbol = 0; // default
+            last.pos = numarg;
+            rd[numrd] = last;
+
+            int numcom=0;
+            int countarg=0;
+            char **command = (char **)malloc((numarg-numrd) * sizeof(char *));
+            for(numcom=0; numcom<rd[0].pos+1; numcom++){
+                command[numcom] = arg[countarg++];
+            }
+
+            for(int i=0; i<numrd; i++){
+                if(rd[i].pos+1>=numarg || (rd[i].pos+1<numarg && arg[rd[i].pos+1][0] == '\0')){
                     printf("Lack file to redirect.\n");
                     fflush(stdout);
                     return 1;
                 }
-                int fp[rd[i+1].pos-rd[i].pos];
                 if(rd[i].symbol == ROUT){
-                    int numfp=0;
-                    for(int pos = rd[i].pos+1; pos < rd[i+1].pos; pos++){
-                        fp[numfp] = open(arg[pos], O_CREAT|O_TRUNC);
-                        if(fp[numfp] < 0){
-                            printf("Cannot open file %s", arg[pos]);
-                            fflush(stdout);
-                            return 1;
-                        }
-                        int fd = dup2(fp[numfp], STDOUT_FILENO);
-                        if(fd<0){
-                            printf("Cannot duplicat file descriptor.\n");
-                            fflush(stdout);
-                        }
-                        numfp++;
+                    int fp = open(arg[rd[i].pos+1], O_CREAT|O_WRONLY|O_TRUNC, 0644);
+                    if(fp < 0){
+                        printf("Cannot open file %s", arg[rd[i].pos+1]);
+                        fflush(stdout);
+                        return 1;
                     }
+                    int fd = dup2(fp, STDOUT_FILENO);
+                    if(fd<0){
+                        printf("Cannot duplicate file descriptor.\n");
+                        fflush(stdout);
+                    }
+                    close(fp);
                 }
                 else if(rd[i].symbol == ROUTA){
-                    int numfp=0;
-                    for(int pos = rd[i].pos+1; pos < rd[i+1].pos; pos++){
-                        fp[numfp] = open(arg[pos], O_CREAT|O_APPEND);
-                        if(fp[numfp] < 0){
-                            printf("Cannot open file %s", arg[pos]);
-                            fflush(stdout);
-                            return 1;
-                        }
-                        int fd = dup2(fp[numfp], STDOUT_FILENO);
-                        if(fd<0){
-                            printf("Cannot duplicat file descriptor.\n");
-                            fflush(stdout);
-                        }
-                        numfp++;
+                    int fp = open(arg[rd[i].pos+1], O_WRONLY|O_CREAT|O_APPEND, 0644);
+                    if(fp < 0){
+                        printf("Cannot open file %s", arg[rd[i].pos+1]);
+                        fflush(stdout);
+                        return 1;
                     }
+                    int fd = dup2(fp, STDOUT_FILENO);
+                    if(fd<0){
+                        printf("Cannot duplicate file descriptor.\n");
+                        fflush(stdout);
+                    }
+                    close(fp);
                 }
                 else{
-                    int numfp=0;
-                    for(int pos = rd[i].pos+1; pos < rd[i+1].pos; pos++){
-                        //fp[numfp] = open(arg[pos], O_CREAT|O_APPEND);改
-                        if(fp[numfp] < 0){
-                            printf("Cannot open file %s", arg[pos]);
-                            fflush(stdout);
-                            return 1;
-                        }
-                        //int fd = dup2(fp[numfp], STDOUT_FILENO);改
-                        if(fd<0){
-                            printf("Cannot duplicat file descriptor.\n");
-                            fflush(stdout);
-                        }
-                        numfp++;
+                    int fp = open(arg[rd[i].pos+1], O_CREAT|O_RDONLY, 0644);
+                    if(fp < 0){
+                        printf("Cannot open file %s", arg[rd[i].pos+1]);
+                        fflush(stdout);
+                        return 1;
                     }
+                    int fd = dup2(fp, STDIN_FILENO);
+                    if(fd<0){
+                        printf("Cannot duplicate file descriptor.\n");
+                        fflush(stdout);
+                    }
+                    close(fp);
+                }
+                for(int j=rd[i].pos+2; j <= rd[i+1].pos; j++){
+                    command[numcom++] = arg[j];
                 }
             }
-            //最后一个rd处理
+
+
+            command[numcom] = NULL;
+
+
+            if(execvp(command[0], command)<0){
+                printf("Cannot execute \"%s\"!\n", arg[0]);
+                fflush(stdout);
+                free(command);
+                exit(0);
+            }
+
+            free(command);
+
         }
     }
     return 0;
@@ -259,11 +255,7 @@ int main() {
         arg[numarg] = NULL;
 
 
-
-
-        //runsimplecommand(arg);
-
-
+        runinoutcommand(arg, numarg, numrd, rd);
 
         for(int i=0; i<numarg; i++){
             free(arg[i]);
@@ -271,9 +263,6 @@ int main() {
         free(arg);
 
     }
-
-
-
 
     return 0;
 }
