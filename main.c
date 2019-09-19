@@ -9,7 +9,6 @@
 #define MAXCHAC 1024 //maximum #characters in a line
 #define MAXCINW 256 //maximum #characters in a word
 #define MAXPIPELINE 16 // maximum #pipeline
-#define MAXFILE 16 // maximum #file that may occur in a redirection
 #define MAXREDIRECTION 128 // maximum #redirection
 
 enum{ROUT, ROUTA, RIN}; // >, >>, <
@@ -34,6 +33,35 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 
     int i=0;
     while(i<MAXCHAC+1){
+
+        while(line[i] == ' ') i++;
+
+        if(line[i] == '>'){
+            if(i<(MAXCHAC+2) && line[i+1]=='>'){
+                struct redirectsymbol temp;
+                temp.pos=(*numarg);
+                temp.symbol=ROUTA;
+                rd[*numrd] = temp;
+                (*numrd)++;
+                i++;
+            }
+            else{
+                struct redirectsymbol temp;
+                temp.pos=(*numarg);
+                temp.symbol=ROUT;
+                rd[*numrd] = temp;
+                (*numrd)++;
+            }
+            i++;
+        }
+        else if(line[i] == '<'){
+            struct redirectsymbol temp;
+            temp.pos=(*numarg);
+            temp.symbol=RIN;
+            rd[*numrd] = temp;
+            (*numrd)++;
+            i++;
+        }
 
         while(line[i] == ' ') i++;
 
@@ -74,40 +102,12 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
         }
         arg[*numarg][j] = '\0';
 
-        while(line[i] == ' ') i++;
-
-        if(line[i] == '>'){
-            if(i<(MAXCHAC+2) && line[i+1]=='>'){
-                struct redirectsymbol temp;
-                temp.pos=(*numarg);
-                temp.symbol=ROUTA;
-                rd[*numrd] = temp;
-                (*numrd)++;
-                i++;
-            }
-            else{
-                struct redirectsymbol temp;
-                temp.pos=(*numarg);
-                temp.symbol=ROUT;
-                rd[*numrd] = temp;
-                (*numrd)++;
-            }
-            i++;
-        }
-        else if(line[i] == '<'){
-            struct redirectsymbol temp;
-            temp.pos=(*numarg);
-            temp.symbol=RIN;
-            rd[*numrd] = temp;
-            (*numrd)++;
-            i++;
-        }
-
         (*numarg)++;
         arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
         arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));
 
     }
+
 
     return arg;
 
@@ -116,7 +116,6 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd)
 {
     pid_t child;
-    int status;
     child = fork();
     if(child == -1) {
         printf("Failed to fork.\n");
@@ -124,7 +123,8 @@ int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd
         return 1;
     }
     if(child != 0){
-        wait(&status);
+        int status;
+        waitpid(child, &status, 0);
     }
     else{
         if(numrd == 0){
@@ -143,20 +143,20 @@ int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd
             int numcom=0;
             int countarg=0;
             char **command = (char **)malloc((numarg-numrd) * sizeof(char *));
-            for(numcom=0; numcom<rd[0].pos+1; numcom++){
+            for(numcom=0; numcom<rd[0].pos; numcom++){
                 command[numcom] = arg[countarg++];
             }
 
             for(int i=0; i<numrd; i++){
-                if(rd[i].pos+1>=numarg || (rd[i].pos+1<numarg && arg[rd[i].pos+1][0] == '\0')){
+                if(rd[i].pos>=numarg || (rd[i].pos<numarg && arg[rd[i].pos][0] == '\0')){
                     printf("Lack file to redirect.\n");
                     fflush(stdout);
                     return 1;
                 }
                 if(rd[i].symbol == ROUT){
-                    int fp = open(arg[rd[i].pos+1], O_CREAT|O_WRONLY|O_TRUNC, 0644);
+                    int fp = open(arg[rd[i].pos], O_CREAT|O_WRONLY|O_TRUNC, 0644);
                     if(fp < 0){
-                        printf("Cannot open file %s", arg[rd[i].pos+1]);
+                        printf("Cannot open file %s", arg[rd[i].pos]);
                         fflush(stdout);
                         return 1;
                     }
@@ -168,9 +168,9 @@ int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd
                     close(fp);
                 }
                 else if(rd[i].symbol == ROUTA){
-                    int fp = open(arg[rd[i].pos+1], O_WRONLY|O_CREAT|O_APPEND, 0644);
+                    int fp = open(arg[rd[i].pos], O_WRONLY|O_CREAT|O_APPEND, 0644);
                     if(fp < 0){
-                        printf("Cannot open file %s", arg[rd[i].pos+1]);
+                        printf("Cannot open file %s", arg[rd[i].pos]);
                         fflush(stdout);
                         return 1;
                     }
@@ -182,9 +182,9 @@ int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd
                     close(fp);
                 }
                 else{
-                    int fp = open(arg[rd[i].pos+1], O_CREAT|O_RDONLY, 0644);
+                    int fp = open(arg[rd[i].pos], O_CREAT|O_RDONLY, 0644);
                     if(fp < 0){
-                        printf("Cannot open file %s", arg[rd[i].pos+1]);
+                        printf("Cannot open file %s", arg[rd[i].pos]);
                         fflush(stdout);
                         return 1;
                     }
@@ -195,17 +195,16 @@ int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd
                     }
                     close(fp);
                 }
-                for(int j=rd[i].pos+2; j <= rd[i+1].pos; j++){
+                for(int j=rd[i].pos+1; j < rd[i+1].pos; j++){
                     command[numcom++] = arg[j];
                 }
             }
-
 
             command[numcom] = NULL;
 
 
             if(execvp(command[0], command)<0){
-                printf("Cannot execute \"%s\"!\n", arg[0]);
+                printf("Cannot execute \"%s\"!\n", command[0]);
                 fflush(stdout);
                 free(command);
                 exit(0);
@@ -237,7 +236,11 @@ int main() {
             break;
         }
 
-        if(strncmp(line, "exit", 4) == 0 && line[4] == '\n') break;
+        if(strncmp(line, "exit", 4) == 0 && line[4] == '\n'){
+            printf("exit\n");
+            fflush(stdout);
+            break;
+	    }
 
         if(line[0] == '\n') continue;
 
@@ -253,6 +256,7 @@ int main() {
         arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmpos);
         free(arg[numarg]);
         arg[numarg] = NULL;
+
 
 
         runinoutcommand(arg, numarg, numrd, rd);
