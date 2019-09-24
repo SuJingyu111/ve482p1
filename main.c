@@ -284,13 +284,13 @@ int runcommand_helper(char **arg, int totalnumcm, int currentnumcm,
         }
         if(cntrd == 0){
             if(execvp(newarg[0], newarg)<0){
-                printf("Cannot execute \"%s\"!\n", arg[0]);
+                printf("Cannot execute \"%s\"!\n", newarg[0]);
                 fflush(stdout);
                 exit(0);
             }
         }
         else{
-            execwithrd(arg, cntarg, cntrd, rd);
+            execwithrd(newarg, cntarg, cntrd, newrd);
         }
     }
     else{
