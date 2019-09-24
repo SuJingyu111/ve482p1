@@ -9,16 +9,22 @@
 #define MAXCHAC 1024 //maximum #characters in a line
 #define MAXCINW 256 //maximum #characters in a word
 #define MAXPIPELINE 16 // maximum #pipeline
-#define MAXREDIRECTION 128 // maximum #redirection
+#define MAXREDIRECTION 24 // maximum #redirection
 
 enum{ROUT, ROUTA, RIN}; // >, >>, <
 
 struct redirectsymbol{
-    int pos; // after which argument
+    int pos; // after which argument in this command
     int symbol; // >, >>, <
 };
 
-char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  redirectsymbol *rd, int *numcm, int *cmpos)
+struct cmdinfo{
+    int cmdpos; // the end position of this command in **arg
+    int cmdnumrd; // #redirection before the end of this command
+};
+
+char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  redirectsymbol *rd,
+        int *numcm, struct cmdinfo *cmd)
 // REQUIRES: *numcm = *numarg = 0
 // EFFECTS: separate line into arg[] according to white space;
 //          numcm records the number of command;
@@ -27,11 +33,8 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 //          return arg.
 //NO REDIRECTION & NO CONSIDERING INCOMPLETE QUOTES
 {
-
-    cmpos[0] = -1;
-    *numcm = 0; //use later
-
     int i=0;
+    int lastcmdpos = 0;
     while(i<MAXCHAC+1){
 
         while(line[i] == ' ') i++;
@@ -39,7 +42,7 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
         if(line[i] == '>'){
             if(i<(MAXCHAC+2) && line[i+1]=='>'){
                 struct redirectsymbol temp;
-                temp.pos=(*numarg);
+                temp.pos=(*numarg) - lastcmdpos;
                 temp.symbol=ROUTA;
                 rd[*numrd] = temp;
                 (*numrd)++;
@@ -47,33 +50,40 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
             }
             else{
                 struct redirectsymbol temp;
-                temp.pos=(*numarg);
+                temp.pos=(*numarg) - lastcmdpos;
                 temp.symbol=ROUT;
                 rd[*numrd] = temp;
                 (*numrd)++;
             }
             i++;
+            continue;
         }
         else if(line[i] == '<'){
             struct redirectsymbol temp;
-            temp.pos=(*numarg);
+            temp.pos=(*numarg) - lastcmdpos;
             temp.symbol=RIN;
             rd[*numrd] = temp;
             (*numrd)++;
             i++;
+            continue;
         }
 
         while(line[i] == ' ') i++;
 
+        if(line[i] == '|'){
+            struct cmdinfo temp;
+            temp.cmdpos = *numarg;
+            lastcmdpos = temp.cmdpos = *numarg;
+            temp.cmdnumrd = *numrd;
+            cmd[*numcm] = temp;
+            (*numcm)++;
+            i++;
+            continue;
+        }
+
         if(line[i] == '\n') {
             break;
         }
-
-        /*if(line[i] == '|'){
-            (*numcm)++;
-            cmpos[(*numcm)] = *numarg;
-            continue;
-        }*/
 
         int j=0;
         /*if(line[i] == '"') {
@@ -95,7 +105,7 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
             i++; //skip the last "
         }*/
 
-        while(line[i] != ' ' && line[i] != '>' && line[i] != '<' && line[i] != '\n'){
+        while(line[i] != ' ' && line[i] != '>' && line[i] != '<' && line[i] != '|' && line[i] != '\n'){
             arg[*numarg][j]=line[i];
             j++;
             i++;
@@ -108,12 +118,92 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 
     }
 
-
     return arg;
 
 }
 
-int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd)
+int execwithrd(char **arg, int numarg, int numrd, struct redirectsymbol *rd){
+    struct redirectsymbol last;
+    last.symbol = 0; // default
+    last.pos = numarg;
+    rd[numrd] = last;
+
+    int numcom=0;
+    int countarg=0;
+    char **command = (char **)malloc((numarg-numrd+1) * sizeof(char *));
+    for(numcom=0; numcom<rd[0].pos; numcom++){
+        command[numcom] = arg[countarg++];
+    }
+
+    for(int i=0; i<numrd; i++){
+        if(rd[i].pos>=numarg || (rd[i].pos<numarg && arg[rd[i].pos][0] == '\0')){
+            printf("Lack file to redirect.\n");
+            fflush(stdout);
+            return 1;
+        }
+        if(rd[i].symbol == ROUT){
+            int fp = open(arg[rd[i].pos], O_CREAT|O_WRONLY|O_TRUNC, 0644);
+            if(fp < 0){
+                printf("Cannot open file %s", arg[rd[i].pos]);
+                fflush(stdout);
+                return 1;
+            }
+            int fd = dup2(fp, STDOUT_FILENO);
+            if(fd<0){
+                printf("Cannot duplicate file descriptor.\n");
+                fflush(stdout);
+            }
+            close(fp);
+        }
+        else if(rd[i].symbol == ROUTA){
+            int fp = open(arg[rd[i].pos], O_WRONLY|O_CREAT|O_APPEND, 0644);
+            if(fp < 0){
+                printf("Cannot open file %s", arg[rd[i].pos]);
+                fflush(stdout);
+                return 1;
+            }
+            int fd = dup2(fp, STDOUT_FILENO);
+            if(fd<0){
+                printf("Cannot duplicate file descriptor.\n");
+                fflush(stdout);
+            }
+            close(fp);
+        }
+        else{
+            int fp = open(arg[rd[i].pos], O_CREAT|O_RDONLY, 0644);
+            if(fp < 0){
+                printf("Cannot open file %s", arg[rd[i].pos]);
+                fflush(stdout);
+                return 1;
+            }
+            int fd = dup2(fp, STDIN_FILENO);
+            if(fd<0){
+                printf("Cannot duplicate file descriptor.\n");
+                fflush(stdout);
+            }
+            close(fp);
+        }
+        for(int j=rd[i].pos+1; j < rd[i+1].pos; j++){
+            command[numcom++] = arg[j];
+        }
+    }
+
+    command[numcom] = NULL;
+
+
+    if(execvp(command[0], command)<0){
+        printf("Cannot execute \"%s\"!\n", command[0]);
+        fflush(stdout);
+        free(command);
+        exit(0);
+    }
+
+    free(command);
+
+    return 0;
+}
+
+int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd)
 {
     pid_t child;
     child = fork();
@@ -135,85 +225,108 @@ int runinoutcommand(char **arg, int numarg, int numrd, struct redirectsymbol *rd
             }
         }
         else{
-            struct redirectsymbol last;
-            last.symbol = 0; // default
-            last.pos = numarg;
-            rd[numrd] = last;
-
-            int numcom=0;
-            int countarg=0;
-            char **command = (char **)malloc((numarg-numrd) * sizeof(char *));
-            for(numcom=0; numcom<rd[0].pos; numcom++){
-                command[numcom] = arg[countarg++];
-            }
-
-            for(int i=0; i<numrd; i++){
-                if(rd[i].pos>=numarg || (rd[i].pos<numarg && arg[rd[i].pos][0] == '\0')){
-                    printf("Lack file to redirect.\n");
-                    fflush(stdout);
-                    return 1;
-                }
-                if(rd[i].symbol == ROUT){
-                    int fp = open(arg[rd[i].pos], O_CREAT|O_WRONLY|O_TRUNC, 0644);
-                    if(fp < 0){
-                        printf("Cannot open file %s", arg[rd[i].pos]);
-                        fflush(stdout);
-                        return 1;
-                    }
-                    int fd = dup2(fp, STDOUT_FILENO);
-                    if(fd<0){
-                        printf("Cannot duplicate file descriptor.\n");
-                        fflush(stdout);
-                    }
-                    close(fp);
-                }
-                else if(rd[i].symbol == ROUTA){
-                    int fp = open(arg[rd[i].pos], O_WRONLY|O_CREAT|O_APPEND, 0644);
-                    if(fp < 0){
-                        printf("Cannot open file %s", arg[rd[i].pos]);
-                        fflush(stdout);
-                        return 1;
-                    }
-                    int fd = dup2(fp, STDOUT_FILENO);
-                    if(fd<0){
-                        printf("Cannot duplicate file descriptor.\n");
-                        fflush(stdout);
-                    }
-                    close(fp);
-                }
-                else{
-                    int fp = open(arg[rd[i].pos], O_CREAT|O_RDONLY, 0644);
-                    if(fp < 0){
-                        printf("Cannot open file %s", arg[rd[i].pos]);
-                        fflush(stdout);
-                        return 1;
-                    }
-                    int fd = dup2(fp, STDIN_FILENO);
-                    if(fd<0){
-                        printf("Cannot duplicate file descriptor.\n");
-                        fflush(stdout);
-                    }
-                    close(fp);
-                }
-                for(int j=rd[i].pos+1; j < rd[i+1].pos; j++){
-                    command[numcom++] = arg[j];
-                }
-            }
-
-            command[numcom] = NULL;
-
-
-            if(execvp(command[0], command)<0){
-                printf("Cannot execute \"%s\"!\n", command[0]);
-                fflush(stdout);
-                free(command);
-                exit(0);
-            }
-
-            free(command);
-
+            execwithrd(arg, numarg, numrd, rd);
         }
     }
+    return 0;
+}
+
+int runcommand_helper(char **arg, int totalnumcm, int currentnumcm,
+                      struct redirectsymbol *rd, struct cmdinfo *cmd)
+{
+    if(currentnumcm > totalnumcm) return 0;
+
+    char **newarg;
+    struct redirectsymbol newrd[MAXREDIRECTION];
+    int cntarg = 0;
+    int cntrd = 0;
+    if(currentnumcm == 0){
+        newarg =  (char **)malloc((cmd[currentnumcm].cmdpos+1) * sizeof(char *));
+        for(int i = 0; i < cmd[currentnumcm].cmdpos; i++){
+            newarg[cntarg++] = arg[i];
+        }
+        for(int i = 0; i < cmd[currentnumcm].cmdnumrd; i++){
+            newrd[cntrd++] = rd[i];
+        }
+    }
+    else{
+        newarg = (char **)malloc((cmd[currentnumcm].cmdpos-cmd[currentnumcm-1].cmdpos+1) * sizeof(char *));
+        for(int i = cmd[currentnumcm-1].cmdpos; i < cmd[currentnumcm].cmdpos; i++){
+            newarg[cntarg++] = arg[i];
+        }
+        for(int i = cmd[currentnumcm-1].cmdnumrd; i < cmd[currentnumcm].cmdnumrd; i++){
+            newrd[cntrd++] = rd[i];
+        }
+    }
+    newarg[cntarg] = NULL;
+
+    int fds[2];
+    if(totalnumcm != currentnumcm){
+        if(pipe(fds) == -1){
+            printf("Failed to pipe.\n");
+            fflush(stdout);
+            return 1;
+        }
+    }
+
+    pid_t pid = vfork();
+    if(pid == -1) {
+        printf("Failed to fork\n");
+        fflush(stdout);
+        free(newarg);
+        return 1;
+    }
+    if(pid == 0){
+        if(totalnumcm != currentnumcm){
+            close(fds[0]);
+            dup2(fds[1], STDOUT_FILENO);
+            close(fds[1]);
+        }
+        if(cntrd == 0){
+            if(execvp(newarg[0], newarg)<0){
+                printf("Cannot execute \"%s\"!\n", arg[0]);
+                fflush(stdout);
+                exit(0);
+            }
+        }
+        else{
+            execwithrd(arg, cntarg, cntrd, rd);
+        }
+    }
+    else{
+        int status;
+        waitpid(pid, &status, 0);
+
+        if(totalnumcm != currentnumcm){
+            close(fds[1]);
+            dup2(fds[0], STDIN_FILENO);
+            close(fds[0]);
+        }
+        runcommand_helper(arg, totalnumcm, currentnumcm+1, rd, cmd);
+    }
+
+    free(newarg);
+
+    return 0;
+}
+
+int runcommand(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
+        struct redirectsymbol *rd, struct cmdinfo *cmd)
+{
+
+    struct cmdinfo last;
+    last.cmdnumrd = totalnumrd;
+    last.cmdpos = totalnumarg;
+    cmd[totalnumcm] = last;
+
+    if(totalnumcm == 0) return runsinglecmd(arg, totalnumarg, totalnumrd, rd);
+
+    int recordin = dup(STDIN_FILENO);
+    int recordout = dup(STDOUT_FILENO);
+    runcommand_helper(arg, totalnumcm, 0, rd, cmd);
+    dup2(recordin, STDIN_FILENO);
+    dup2(recordout, STDOUT_FILENO);
+
     return 0;
 }
 
@@ -235,31 +348,47 @@ int main() {
             fflush(stdout);
             break;
         }
+        fflush(stdin);
 
         if(strncmp(line, "exit", 4) == 0 && line[4] == '\n'){
             printf("exit\n");
             fflush(stdout);
             break;
-	    }
+        }
 
         if(line[0] == '\n') continue;
 
 
-        int numarg = 0, numcm = 0;
+        int numarg = 0;
         char **arg;
         arg = (char **)malloc(sizeof(char *)); //first assign one argument
         arg[0] = (char *)calloc(MAXCINW, sizeof(char)); //suppose #characters of a word will not exceed MAXCINW
-        int cmpos[MAXPIPELINE]; //suppose there are at most MAXPIPELINE pipelines
         int numrd = 0;
         struct redirectsymbol rd[MAXREDIRECTION];
+        int numcm = 0;
+        struct cmdinfo cmd[MAXPIPELINE];
 
-        arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmpos);
+
+        arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd);
         free(arg[numarg]);
         arg[numarg] = NULL;
 
+        runcommand(arg, numarg, numrd, numcm, rd, cmd);
+
+        /*for(int i = 0; i < numcm; i++){
+            printf("pos: %d ", cmd[i].cmdpos);
+            printf("rd: %d ", cmd[i].cmdnumrd);
+        }*/
+
+        /*for(int i=0; i<numrd; i++){
+            printf("rd%d ", rd[i].pos);
+        }*/
+
+        /*printf("numrd%d", numrd);*/
+        //printf("%d", numarg);
 
 
-        runinoutcommand(arg, numarg, numrd, rd);
+        //runinoutcommand(arg, numarg, numrd, rd);
 
         for(int i=0; i<numarg; i++){
             free(arg[i]);
