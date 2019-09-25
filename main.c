@@ -10,6 +10,7 @@
 #define MAXCINW 256 //maximum #characters in a word
 #define MAXPIPELINE 16 // maximum #pipeline
 #define MAXREDIRECTION 24 // maximum #redirection
+#define MAXDIRLENGTH 100 // maximum current directory length
 
 enum{ROUT, ROUTA, RIN}; // >, >>, <
 
@@ -122,6 +123,37 @@ char ** parse(const char *line, char ** arg, int *numarg, int *numrd, struct  re
 
 }
 
+int execbuiltin(char **cmd, int numarg){
+    if(strcmp(cmd[0], "pwd")==0){
+        char dir[MAXDIRLENGTH];
+        if(getcwd(dir, sizeof(dir)) == NULL){
+            printf("Error in getting current directory.\n");
+            fflush(stdout);
+            return 1;
+        }
+        printf("%s\n", dir);
+        fflush(stdout);
+        return 0;
+    }
+    else if(strcmp(cmd[0], "cd") == 0){
+        if(numarg > 2){
+            fprintf(stderr, "Too many arguments for cd.\n");
+        }
+        else if(numarg < 2){
+            fprintf(stderr, "Too few arguments for cd.\n");
+            fflush(stdout);
+        }
+        else{
+            if(chdir(cmd[1]) < 0){
+                fprintf(stderr, "Cannot change to directory \"%s\".\n", cmd[1]);
+                fflush(stdout);
+            }
+        }
+    }
+
+    return 0;
+}
+
 int execwithrd(char **arg, int numarg, int numrd, struct redirectsymbol *rd){
     struct redirectsymbol last;
     last.symbol = 0; // default
@@ -190,13 +222,22 @@ int execwithrd(char **arg, int numarg, int numrd, struct redirectsymbol *rd){
 
     command[numcom] = NULL;
 
-
-    if(execvp(command[0], command)<0){
-        printf("Cannot execute \"%s\"!\n", command[0]);
-        fflush(stdout);
+    // built-in
+    if(strcmp(command[0], "pwd") == 0 || strcmp(command[0], "cd") == 0) {
+        execbuiltin(command, numcom);
+        //execbuiltin(command);
         free(command);
         exit(0);
     }
+    else{
+        if(execvp(command[0], command)<0){
+            printf("Cannot execute \"%s\"!\n", command[0]);
+            fflush(stdout);
+            free(command);
+            exit(0);
+        }
+    }
+
 
     free(command);
 
@@ -218,10 +259,17 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd)
     }
     else{
         if(numrd == 0){
-            if(execvp(arg[0], arg)<0){
-                printf("Cannot execute \"%s\"!\n", arg[0]);
-                fflush(stdout);
+            if(strcmp(arg[0], "pwd") == 0 || strcmp(arg[0], "cd") == 0){
+                execbuiltin(arg,numarg);
+                //execbuiltin(arg);
                 exit(0);
+            } // builtin
+            else{
+                if(execvp(arg[0], arg)<0){
+                    printf("Cannot execute \"%s\"!\n", arg[0]);
+                    fflush(stdout);
+                    exit(0);
+                }
             }
         }
         else{
@@ -261,6 +309,7 @@ int execwithpipe_helper(char **arg, int totalnumcm,
         }
         newarg[cntarg] = NULL;
 
+
         int fds[2];
         if(count != totalnumcm){
             if(pipe(fds) == -1){
@@ -269,6 +318,7 @@ int execwithpipe_helper(char **arg, int totalnumcm,
                 return 1;
             }
         }
+
         pid_t pid = fork();
         if(pid == -1) {
             printf("Failed to fork\n");
@@ -276,7 +326,6 @@ int execwithpipe_helper(char **arg, int totalnumcm,
             free(newarg);
             return 1;
         }
-
         if(pid == 0){
             if(count != totalnumcm){
                 close(fds[0]);
@@ -284,10 +333,17 @@ int execwithpipe_helper(char **arg, int totalnumcm,
                 close(fds[1]);
             }
             if(cntrd == 0){
-                if(execvp(newarg[0], newarg)<0){
-                    printf("Cannot execute \"%s\"!\n", newarg[0]);
-                    fflush(stdout);
+                if(strcmp(newarg[0], "pwd") == 0 || strcmp(newarg[0], "cd") == 0){
+                    execbuiltin(newarg, cntarg);
+                    //execbuiltin(arg);
                     exit(0);
+                } // builtin
+                else{
+                    if(execvp(newarg[0], newarg)<0){
+                        printf("Cannot execute \"%s\"!\n", newarg[0]);
+                        fflush(stdout);
+                        exit(0);
+                    }
                 }
             }
             else{
@@ -298,7 +354,7 @@ int execwithpipe_helper(char **arg, int totalnumcm,
             int status;
             waitpid(pid, &status, 0);
 
-            if(totalnumcm){
+            if(count != totalnumcm){
                 close(fds[1]);
                 dup2(fds[0], STDIN_FILENO);
                 close(fds[0]);
@@ -375,8 +431,25 @@ int main() {
         free(arg[numarg]);
         arg[numarg] = NULL;
 
-        execwithpipe(arg, numarg, numrd, numcm, rd, cmd);
-
+        if(strcmp(arg[0], "cd") == 0 && numcm == 0 && numrd == 0){
+            if(numarg > 2){
+                printf("Too many arguments for cd.\n");
+                fflush(stdout);
+            }
+            else if(numarg < 2){
+                printf("Too few arguments for cd.\n");
+                fflush(stdout);
+            }
+            else{
+                if(chdir(arg[1]) < 0){
+                    printf("Cannot change to directory \"%s\".\n", arg[1]);
+                    fflush(stdout);
+                }
+            }
+        }
+        else{
+            execwithpipe(arg, numarg, numrd, numcm, rd, cmd);
+        }
 
         /*for(int i = 0; i < numcm; i++){
             printf("pos: %d ", cmd[i].cmdpos);
