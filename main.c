@@ -231,86 +231,90 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd)
     return 0;
 }
 
-int runcommand_helper(char **arg, int totalnumcm, int currentnumcm,
+int execwithpipe_helper(char **arg, int totalnumcm,
                       struct redirectsymbol *rd, struct cmdinfo *cmd)
 {
-    if(currentnumcm > totalnumcm) return 0;
+    int count = 0;
 
-    char **newarg;
-    struct redirectsymbol newrd[MAXREDIRECTION];
-    int cntarg = 0;
-    int cntrd = 0;
-    if(currentnumcm == 0){
-        newarg =  (char **)malloc((cmd[currentnumcm].cmdpos+1) * sizeof(char *));
-        for(int i = 0; i < cmd[currentnumcm].cmdpos; i++){
-            newarg[cntarg++] = arg[i];
-        }
-        for(int i = 0; i < cmd[currentnumcm].cmdnumrd; i++){
-            newrd[cntrd++] = rd[i];
-        }
-    }
-    else{
-        newarg = (char **)malloc((cmd[currentnumcm].cmdpos-cmd[currentnumcm-1].cmdpos+1) * sizeof(char *));
-        for(int i = cmd[currentnumcm-1].cmdpos; i < cmd[currentnumcm].cmdpos; i++){
-            newarg[cntarg++] = arg[i];
-        }
-        for(int i = cmd[currentnumcm-1].cmdnumrd; i < cmd[currentnumcm].cmdnumrd; i++){
-            newrd[cntrd++] = rd[i];
-        }
-    }
-    newarg[cntarg] = NULL;
-
-    int fds[2];
-    if(totalnumcm != currentnumcm){
-        if(pipe(fds) == -1){
-            printf("Failed to pipe.\n");
-            fflush(stdout);
-            return 1;
-        }
-    }
-
-    pid_t pid = vfork();
-    if(pid == -1) {
-        printf("Failed to fork\n");
-        fflush(stdout);
-        free(newarg);
-        return 1;
-    }
-    if(pid == 0){
-        if(totalnumcm != currentnumcm){
-            close(fds[0]);
-            dup2(fds[1], STDOUT_FILENO);
-            close(fds[1]);
-        }
-        if(cntrd == 0){
-            if(execvp(newarg[0], newarg)<0){
-                printf("Cannot execute \"%s\"!\n", newarg[0]);
-                fflush(stdout);
-                exit(0);
+    while(count <= totalnumcm){
+        char **newarg;
+        struct redirectsymbol newrd[MAXREDIRECTION];
+        int cntarg = 0;
+        int cntrd = 0;
+        if(count == 0){
+            newarg =  (char **)malloc((cmd[count].cmdpos+1) * sizeof(char *));
+            for(int i = 0; i < cmd[count].cmdpos; i++){
+                newarg[cntarg++] = arg[i];
+            }
+            for(int i = 0; i < cmd[count].cmdnumrd; i++){
+                newrd[cntrd++] = rd[i];
             }
         }
         else{
-            execwithrd(newarg, cntarg, cntrd, newrd);
+            newarg = (char **)malloc((cmd[count].cmdpos-cmd[count-1].cmdpos+1) * sizeof(char *));
+            for(int i = cmd[count-1].cmdpos; i < cmd[count].cmdpos; i++){
+                newarg[cntarg++] = arg[i];
+            }
+            for(int i = cmd[count-1].cmdnumrd; i < cmd[count].cmdnumrd; i++){
+                newrd[cntrd++] = rd[i];
+            }
         }
-    }
-    else{
-        int status;
-        waitpid(pid, &status, 0);
+        newarg[cntarg] = NULL;
 
-        if(totalnumcm != currentnumcm){
-            close(fds[1]);
-            dup2(fds[0], STDIN_FILENO);
-            close(fds[0]);
+        int fds[2];
+        if(count != totalnumcm){
+            if(pipe(fds) == -1){
+                printf("Failed to pipe.\n");
+                fflush(stdout);
+                return 1;
+            }
         }
-        runcommand_helper(arg, totalnumcm, currentnumcm+1, rd, cmd);
-    }
+        pid_t pid = fork();
+        if(pid == -1) {
+            printf("Failed to fork\n");
+            fflush(stdout);
+            free(newarg);
+            return 1;
+        }
 
-    free(newarg);
+        if(pid == 0){
+            if(count != totalnumcm){
+                close(fds[0]);
+                dup2(fds[1], STDOUT_FILENO);
+                close(fds[1]);
+            }
+            if(cntrd == 0){
+                if(execvp(newarg[0], newarg)<0){
+                    printf("Cannot execute \"%s\"!\n", newarg[0]);
+                    fflush(stdout);
+                    exit(0);
+                }
+            }
+            else{
+                execwithrd(newarg, cntarg, cntrd, newrd);
+            }
+        }
+        else{
+            int status;
+            waitpid(pid, &status, 0);
+
+            if(totalnumcm){
+                close(fds[1]);
+                dup2(fds[0], STDIN_FILENO);
+                close(fds[0]);
+            }
+
+        }
+
+        count++;
+        free(newarg);
+    }
 
     return 0;
 }
 
-int runcommand(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
+
+int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
         struct redirectsymbol *rd, struct cmdinfo *cmd)
 {
 
@@ -323,7 +327,7 @@ int runcommand(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
 
     int recordin = dup(STDIN_FILENO);
     int recordout = dup(STDOUT_FILENO);
-    runcommand_helper(arg, totalnumcm, 0, rd, cmd);
+    execwithpipe_helper(arg, totalnumcm, rd, cmd);
     dup2(recordin, STDIN_FILENO);
     dup2(recordout, STDOUT_FILENO);
 
@@ -336,7 +340,7 @@ int runcommand(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
 
 int main() {
 
-    char line[MAXCHAC+1]; //input; +1 to ensure the last element of line is '\0
+    char line[MAXCHAC+1]; //input; +1 to ensure the last element of line is '\0'
 
     while(1){
 
@@ -344,9 +348,7 @@ int main() {
         fflush(stdout);
 
         if(fgets(line, MAXCHAC+1, stdin) == NULL){
-            printf("Error in getting command.\n");
-            fflush(stdout);
-            break;
+            break; // ctrl+d is pressed
         }
         fflush(stdin);
 
@@ -373,7 +375,8 @@ int main() {
         free(arg[numarg]);
         arg[numarg] = NULL;
 
-        runcommand(arg, numarg, numrd, numcm, rd, cmd);
+        execwithpipe(arg, numarg, numrd, numcm, rd, cmd);
+
 
         /*for(int i = 0; i < numcm; i++){
             printf("pos: %d ", cmd[i].cmdpos);
