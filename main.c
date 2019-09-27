@@ -420,104 +420,6 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm,
     return 0;
 }
 
-/*int execwithpipe_helper(char **arg, int totalnumcm,
-                      struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp)
-{
-    int count = 0;
-
-    while(count <= totalnumcm){
-        char **newarg;
-        struct redirectsymbol newrd[MAXREDIRECTION];
-        int cntarg = 0;
-        int cntrd = 0;
-        if(count == 0){
-            newarg =  (char **)malloc((cmd[count].cmdpos+1) * sizeof(char *));
-            for(int i = 0; i < cmd[count].cmdpos; i++){
-                newarg[cntarg++] = arg[i];
-            }
-            for(int i = 0; i < cmd[count].cmdnumrd; i++){
-                newrd[cntrd++] = rd[i];
-            }
-        }
-        else{
-            newarg = (char **)malloc((cmd[count].cmdpos-cmd[count-1].cmdpos+1) * sizeof(char *));
-            for(int i = cmd[count-1].cmdpos; i < cmd[count].cmdpos; i++){
-                newarg[cntarg++] = arg[i];
-            }
-            for(int i = cmd[count-1].cmdnumrd; i < cmd[count].cmdnumrd; i++){
-                newrd[cntrd++] = rd[i];
-            }
-        }
-        newarg[cntarg] = NULL;
-
-
-        int fds[2];
-        if(count != totalnumcm){
-            if(pipe(fds) == -1){
-                printf("Failed to pipe.\n");
-                fflush(stdout);
-                return 1;
-            }
-        }
-
-        pid_t pid = fork();
-        if(pid == -1) {
-            printf("Failed to fork\n");
-            fflush(stdout);
-            free(newarg);
-            return 1;
-        }
-        if(pid == 0){
-            if(count != totalnumcm){
-                close(fds[0]);
-                dup2(fds[1], STDOUT_FILENO);
-                close(fds[1]);
-            }
-            if(cntrd == 0){
-                if(strcmp(newarg[0], "pwd") == 0 || strcmp(newarg[0], "cd") == 0){
-                    execbuiltin(newarg, cntarg);
-                    //execbuiltin(arg);
-                    exit(0);
-                } // builtin
-                else{
-                    if(execvp(newarg[0], newarg)<0){
-                        printf("Cannot execute \"%s\"!\n", newarg[0]);
-                        fflush(stdout);
-                        exit(0);
-                    }
-                }
-            }
-            else{
-                execwithrd(newarg, cntarg, cntrd, newrd);
-            }
-        }
-        else{
-            temp->pid[count] = pid;
-            jobgroup[numjob] = *temp;
-
-            int status;
-            waitpid(pid, &status, 0);
-
-            if(count != totalnumcm){
-                close(fds[1]);
-                dup2(fds[0], STDIN_FILENO);
-                close(fds[0]);
-            }
-
-
-        }
-
-        count++;
-        free(newarg);
-    }
-
-    temp->numpid = count;
-    jobgroup[numjob] = *temp;
-
-    return 0;
-}*/
-
-
 int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
         struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp)
 {
@@ -600,6 +502,11 @@ int main() {
         }
         fflush(stdin);
 
+        while(line[strlen(line)-1] != '\n'){
+            char appendline[MAXCHAC+1];
+            if(fgets(appendline, MAXCHAC+1, stdin) != NULL) strcat(line, appendline);
+        } // ctrl+d in unfinished command
+
         if(strncmp(line, "exit", 4) == 0 && line[4] == '\n'){
             //printjob(numjob, jobgroup);
             printf("exit\n");
@@ -608,6 +515,10 @@ int main() {
         }
 
         if(line[0] == '\n') continue;
+
+        //printf("%c %c ", line[strlen(line)-1], '\004');
+        //if(line[strlen(line)-1] != '\n') continue;
+        //printf("%c", line[strlen(line)]);
 
 
         int numarg = 0;
