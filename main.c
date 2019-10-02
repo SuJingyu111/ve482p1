@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <setjmp.h>
 
 #define MAXCHAC 1024 //maximum #characters in a line
 #define MAXCINW 256 //maximum #characters in a word
@@ -27,16 +28,31 @@ struct job{
     pid_t pid[MAXPIPELINE];
     int numpid;
     int forb;
+    int state[MAXPIPELINE]; // whether it is running or done
     char content[MAXCHAC+1];
 };
 
-struct job jobgroup[MAXJOB];
-int numjob = 0;
+pid_t mainpid;
+jmp_buf env;
+char **arg;
+int numarg = 0;
 
 struct cmdinfo{
     int cmdpos; // the end position of this command in **arg
     int cmdnumrd; // #redirection before the end of this command
 };
+
+void sigint_handler()
+{
+    /*if(numarg != 0){
+        for(int i = 0; i < numarg; i++){
+            free(arg[i]);
+        }
+        free(arg);
+    }*/
+    printf("\n");
+    siglongjmp(env, 1);
+}
 
 char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirectsymbol *rd,
         int *numcm, struct cmdinfo *cmd)
@@ -97,7 +113,17 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         }
 
         if(line[i] == '\n') {
-            break;
+            int whetherbreak = 0;
+            if((*numrd) > 0 && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)) whetherbreak = 1;
+            if((*numcm) > 0 && cmd[(*numcm)-1].cmdpos == (*numarg)){
+                whetherbreak = 1;
+            }
+            if(whetherbreak){
+                i = 0;
+                while(fgets(line, MAXCHAC+1, stdin) == NULL){}
+                continue;
+            }
+            else break;
         }
 
         int j=0;
@@ -286,9 +312,9 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
     return 0;
 }
 
-int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, struct job *temp)
+int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, struct job *temp,
+                 struct job *jobgroup, int numjob, char **command)
 {
-    char **command = (char **)malloc((numarg-numrd+1) * sizeof(char *));
     pid_t child;
     child = fork();
     if(child == -1) {
@@ -301,16 +327,21 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
         temp->numpid = 1;
         jobgroup[numjob] = *temp;
 
-        int status;
-        waitpid(child, &status, 0);
-
+        if(temp->forb == FG){
+            waitpid(child, &temp->state[0], 0);
+        }
+        else{
+            int status;
+            waitpid(child, &status, WNOHANG|WUNTRACED);
+        }
     }
     else{
+        if(temp->forb == FG) setpgid(0, mainpid);
         if(numrd == 0){
             if(strcmp(arg[0], "pwd") == 0 || strcmp(arg[0], "cd") == 0){
                 execbuiltin(arg,numarg);
                 //execbuiltin(arg);
-                free(command);
+                //free(command);
                 exit(0);
             } // builtin
             else{
@@ -325,12 +356,11 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
             execwithrd(arg, command, numarg, numrd, rd);
         }
     }
-    free(command);
     return 0;
 }
 
-int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm,
-                        struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp)
+int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct redirectsymbol *rd,
+        struct cmdinfo *cmd, struct job *temp, struct job *jobgroup, int numjob)
 {
     if(currentnumcm > totalnumcm) return 0;
 
@@ -376,6 +406,7 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm,
         return 1;
     }
     if(pid == 0){
+        if(temp->forb == FG) setpgid(0, mainpid);
         if(totalnumcm != currentnumcm){
             close(fds[0]);
             dup2(fds[1], STDOUT_FILENO);
@@ -400,6 +431,8 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm,
         }
     }
     else{
+        //signal(SIGINT, proc_sigint_handler);
+
         temp->pid[currentnumcm] = pid;
         jobgroup[numjob] = *temp;
 
@@ -408,10 +441,18 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm,
             dup2(fds[0], STDIN_FILENO);
             close(fds[0]);
         }
-        execwithpipe_helper(arg, totalnumcm, currentnumcm+1, rd, cmd, temp);
+        execwithpipe_helper(arg, totalnumcm, currentnumcm+1, rd, cmd, temp, jobgroup, numjob);
 
-        int status;
-        waitpid(pid, &status, 0);
+        if(temp->forb == FG){
+            //int status;
+            //waitpid(pid, &status, 0);
+            waitpid(pid, &temp->state[currentnumcm], 0);
+        }
+        else{
+            waitpid(pid, &temp->state[currentnumcm], WNOHANG);
+        }
+
+        //printf("return code is %d\n",WEXITSTATUS(status));
 
     }
     free(command);
@@ -420,8 +461,10 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm,
     return 0;
 }
 
+char **command;
+
 int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
-        struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp)
+        struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp, struct job *jobgroup, int numjob)
 {
 
     struct cmdinfo last;
@@ -432,97 +475,138 @@ int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
     temp->numpid = totalnumcm+1;
     jobgroup[numjob] = *temp;
 
-    if(totalnumcm == 0) return runsinglecmd(arg, totalnumarg, totalnumrd, rd, temp);
+    if(totalnumcm == 0){
+        command = (char **)malloc((totalnumarg-totalnumrd+1) * sizeof(char *));
+        int result = runsinglecmd(arg, totalnumarg, totalnumrd, rd, temp, jobgroup, numjob, command);
+        free(command);
+        return result;
+    }
 
     int recordin = dup(STDIN_FILENO);
     int recordout = dup(STDOUT_FILENO);
-    execwithpipe_helper(arg, totalnumcm, 0, rd, cmd, temp);
+    execwithpipe_helper(arg, totalnumcm, 0, rd, cmd, temp, jobgroup, numjob);
     dup2(recordin, STDIN_FILENO);
     dup2(recordout, STDOUT_FILENO);
 
     return 0;
 }
 
+void initjob(struct job *tjob)
+{
+    for(int ii = 0; ii < MAXPIPELINE; ii++){
+        tjob->pid[ii] = 0;
+        tjob->state[ii] = -1;
+    }
+    tjob->numpid = 0; // default
+    tjob->jobid = 1; // default
+    tjob->forb = BG; // default
+    tjob->content[0] = '\0'; // default
+}
+
 void init(struct job *jobgroup)
 {
     for(int i = 0; i < MAXJOB; i++){
-        for(int ii = 0; ii < MAXPIPELINE; ii++){
-            jobgroup[i].pid[ii] = 0;
-        }
-        jobgroup[i].numpid = 0; // default
-        jobgroup[i].jobid = i+1; // default
-        jobgroup[i].forb = BG; // default
-        jobgroup[i].content[0] = '\0'; // default
+        initjob(&(jobgroup[i]));
     }
 }
 
-/*void printjob(int numjob, struct job *jobgroup){
-    for(int i = 0; i < numjob; i++){
-        printf("[%d]", jobgroup[i].jobid);
-        for(int ii = 0; ii < jobgroup[i].numpid; ii++){
-            printf(" (%d)", jobgroup[i].pid[ii]);
-        }
-        printf(" %s\n", jobgroup[i].content);
-    }
-}*/
-
-void sigint_handler()
+int isrunning(struct job tjob)
+// EFFECTS: return 1 if tjob is running, return 0 if tjob is done
 {
-    //printjob(MAXJOB, jobgroup);
-    for(int i = 0; i < MAXJOB; i++){
-        if(jobgroup[i].forb == FG){
-            for(int ii = 0; ii < jobgroup[i].numpid; ii++){
-                if(jobgroup[i].pid[ii] != 0 && kill(jobgroup[i].pid[ii], 0) == 0){
-                    kill(-jobgroup[i].pid[ii], SIGINT);
-                    printf("\n");
-                    return;
-                }
-            }
+    int result = 0;
+    for(int i = 0; i < tjob.numpid; i++){
+        int status;
+        if(waitpid(tjob.pid[i], &status, WNOHANG) == 0) {
+            result = 1;
+            break;
+        }
+        else{
+            tjob.state[i] = 1;
         }
     }
-    printf("\nmumsh $ ");
-    fflush(stdout);
+    return result;
+}
+
+void printbackgroundjob(int numjob, struct job *jobgroup)
+{
+    for(int i = 0; i <= numjob; i++){
+        if(jobgroup[i].forb == BG && jobgroup[i].pid[0] != 0){
+            printf("[%d]", jobgroup[i].jobid);
+            fflush(stdout);
+            if(isrunning(jobgroup[i])){
+                printf(" running");
+            }
+            else{
+                printf(" done");
+            }
+            fflush(stdout);
+            printf(" %s", jobgroup[i].content);
+            fflush(stdout);
+        }
+    }
 }
 
 int main() {
 
-    char line[MAXCHAC+1]; //input; +1 to ensure the last element of line is '\0'
-
+    struct job jobgroup[MAXJOB];
+    int numjob = 0;
     init(jobgroup);
 
+    mainpid = getpid();
+    setpgid(0, 0);
+
     signal(SIGINT, sigint_handler);
+    sigsetjmp(env, 1);
+    if(numarg != 0){
+        for(int i = 0; i < numarg; i++){
+            free(arg[i]);
+        }
+        free(arg);
+    }
+    //free(arg);
+    /*if(numarg != 0){
+    }*/
 
     while(1){
+
+        numarg = 0;
 
         printf("mumsh $ ");
         fflush(stdout);
 
-        if(fgets(line, MAXCHAC+1, stdin) == NULL){
-            break; // ctrl+d is pressed
+        char line[MAXCHAC+1];
+        for(int i=0; i<MAXCHAC+1; i++){
+            line[i] = '\0';
         }
-        fflush(stdin);
-
-        while(line[strlen(line)-1] != '\n'){
-            char appendline[MAXCHAC+1];
-            if(fgets(appendline, MAXCHAC+1, stdin) != NULL) strcat(line, appendline);
-        } // ctrl+d in unfinished command
+        char tempchar;
+        int cntchar = 0;
+        while((tempchar = (char)fgetc(stdin)) != '\n'){
+            if(tempchar == EOF){
+                if(line[0] != '\0') continue;
+                else{
+                    printf("exit\n");
+                    fflush(stdout);
+                    return 0;
+                }
+            }
+            line[cntchar] = tempchar;
+            cntchar++;
+        }
+        line[cntchar] = '\n';
 
         if(strncmp(line, "exit", 4) == 0 && line[4] == '\n'){
-            //printjob(numjob, jobgroup);
             printf("exit\n");
             fflush(stdout);
             break;
         }
 
+        if(strncmp(line, "jobs", 4) == 0 && line[4] == '\n'){
+            printbackgroundjob(numjob, jobgroup);
+            continue;
+        }
+
         if(line[0] == '\n') continue;
 
-        //printf("%c %c ", line[strlen(line)-1], '\004');
-        //if(line[strlen(line)-1] != '\n') continue;
-        //printf("%c", line[strlen(line)]);
-
-
-        int numarg = 0;
-        char **arg;
         arg = (char **)malloc(sizeof(char *)); //first assign one argument
         arg[0] = (char *)calloc(MAXCINW, sizeof(char)); //suppose #characters of a word will not exceed MAXCINW
         int numrd = 0;
@@ -531,11 +615,14 @@ int main() {
         struct cmdinfo cmd[MAXPIPELINE];
 
         struct job temp;
+        initjob(&temp);
         for(int i = 0; i < MAXCHAC+1; i++){
             temp.content[i] = line[i];
         }
         temp.jobid = numjob+1;
-        if(line[strlen(line)-1] == '&'){
+        if(line[cntchar-1] == '&'){
+            line[cntchar] = '\0';
+            line[cntchar-1] = '\n'; // remove '&' for background job
             temp.forb = BG;
         }
         else{
@@ -543,9 +630,7 @@ int main() {
         }
         temp.numpid = 0; // default
 
-
         arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd);
-        // if it is a background process, remember to remove '&' !!!!!!!!!!!!!!!!!!!!!!!!
         free(arg[numarg]);
         arg[numarg] = NULL;
 
@@ -566,25 +651,22 @@ int main() {
             }
         }
         else{
-            execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp);
+            execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp, jobgroup, numjob);
+            if(temp.forb == BG){
+                printf("[%d] ", temp.jobid);
+                fflush(stdout);
+                for(int i = 0; i<temp.numpid; i++){
+                    printf("(%d) ", temp.pid[i]);
+                    fflush(stdout);
+                }
+                printf("%s", temp.content);
+                fflush(stdout);
+            }
             jobgroup[numjob] = temp;
             numjob = (numjob+1) % MAXJOB;
         }
 
-        /*for(int i = 0; i < numcm; i++){
-            printf("pos: %d ", cmd[i].cmdpos);
-            printf("rd: %d ", cmd[i].cmdnumrd);
-        }*/
 
-        /*for(int i=0; i<numrd; i++){
-            printf("rd%d ", rd[i].pos);
-        }*/
-
-        /*printf("numrd%d", numrd);*/
-        //printf("%d", numarg);
-
-
-        //runinoutcommand(arg, numarg, numrd, rd);
 
         for(int i=0; i<numarg; i++){
             free(arg[i]);
@@ -593,5 +675,144 @@ int main() {
 
     }
 
+     //char line[MAXCHAC+1]; input; +1 to ensure the last element of line is '\0'
+
+    /*struct job jobgroup[MAXJOB];
+    int numjob = 0;
+    init(jobgroup);
+
+    mainpid = getpid();
+    setpgid(0, 0);
+
+    signal(SIGINT, sigint_handler);
+
+    int numarg = 0;
+    char **arg = (char **)malloc(sizeof(char *));
+
+    while(1){
+
+        sigsetjmp(env, 1);
+
+        for(int i=0; i<numarg; i++){
+            free(arg[i]);
+        }
+        free(arg);
+
+        printf("mumsh $ ");
+        fflush(stdout);
+
+        char line[MAXCHAC+1];
+        for(int i=0; i<MAXCHAC+1; i++){
+            line[i] = '\0';
+        }
+        char tempchar;
+        int cntchar = 0;
+        while((tempchar = (char)fgetc(stdin)) != '\n'){
+            if(tempchar == EOF){
+                if(line[0] != '\0') continue;
+                else{
+                    printf("exit\n");
+                    fflush(stdout);
+                    return 0;
+                }
+            }
+            line[cntchar] = tempchar;
+            cntchar++;
+        }
+        line[cntchar] = '\n';
+
+        if(strncmp(line, "exit", 4) == 0 && line[4] == '\n'){
+            printf("exit\n");
+            fflush(stdout);
+            break;
+        }
+
+        if(strncmp(line, "jobs", 4) == 0 && line[4] == '\n'){
+            printbackgroundjob(numjob, jobgroup);
+            continue;
+        }
+
+        if(line[0] == '\n') continue;
+
+        numarg = 0;
+        arg = (char **)malloc(sizeof(char *)); //first assign one argument
+        arg[0] = (char *)calloc(MAXCINW, sizeof(char)); //suppose #characters of a word will not exceed MAXCINW
+        int numrd = 0;
+        struct redirectsymbol rd[MAXREDIRECTION];
+        int numcm = 0;
+        struct cmdinfo cmd[MAXPIPELINE];
+
+        struct job temp;
+        initjob(&temp);
+        for(int i = 0; i < MAXCHAC+1; i++){
+            temp.content[i] = line[i];
+        }
+        temp.jobid = numjob+1;
+        if(line[cntchar-1] == '&'){
+            line[cntchar] = '\0';
+            line[cntchar-1] = '\n'; // remove '&' for background job
+            temp.forb = BG;
+        }
+        else{
+            temp.forb = FG;
+        }
+        temp.numpid = 0; // default
+
+
+
+        arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd);
+        free(arg[numarg]);
+        arg[numarg] = NULL;
+
+        if(strcmp(arg[0], "cd") == 0 && numcm == 0 && numrd == 0){
+            if(numarg > 2){
+                printf("Too many arguments for cd.\n");
+                fflush(stdout);
+            }
+            else if(numarg < 2){
+                printf("Too few arguments for cd.\n");
+                fflush(stdout);
+            }
+            else{
+                if(chdir(arg[1]) < 0){
+                    printf("Cannot change to directory \"%s\".\n", arg[1]);
+                    fflush(stdout);
+                }
+            }
+        }
+        else{
+            execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp, jobgroup, numjob);
+            if(temp.forb == BG){
+                printf("[%d] ", temp.jobid);
+                fflush(stdout);
+                for(int i = 0; i<temp.numpid; i++){
+                    printf("(%d) ", temp.pid[i]);
+                    fflush(stdout);
+                }
+                printf("%s", temp.content);
+                fflush(stdout);
+            }
+            jobgroup[numjob] = temp;
+            numjob = (numjob+1) % MAXJOB;
+        }
+
+
+        //printf("%d", numarg);
+
+    }*/
+
+    //free(arg);
+
     return 0;
 }
+
+/*for(int i = 0; i < numcm; i++){
+            printf("pos: %d ", cmd[i].cmdpos);
+            printf("rd: %d ", cmd[i].cmdnumrd);
+        }*/
+
+/*for(int i=0; i<numrd; i++){
+    printf("rd%d ", rd[i].pos);
+}*/
+
+/*printf("numrd%d", numrd);*/
