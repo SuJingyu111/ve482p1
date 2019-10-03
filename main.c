@@ -54,6 +54,11 @@ void sigint_handler()
     siglongjmp(env, 1);
 }
 
+void proc_sigint_handler()
+{
+    printf("\n");
+}
+
 char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirectsymbol *rd,
         int *numcm, struct cmdinfo *cmd)
 // REQUIRES: *numcm = *numarg = 0
@@ -431,7 +436,7 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
         }
     }
     else{
-        //signal(SIGINT, proc_sigint_handler);
+        signal(SIGINT, proc_sigint_handler);
 
         temp->pid[currentnumcm] = pid;
         jobgroup[numjob] = *temp;
@@ -461,7 +466,7 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
     return 0;
 }
 
-char **command;
+char **singlecommand;
 
 int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
         struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp, struct job *jobgroup, int numjob)
@@ -476,9 +481,9 @@ int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
     jobgroup[numjob] = *temp;
 
     if(totalnumcm == 0){
-        command = (char **)malloc((totalnumarg-totalnumrd+1) * sizeof(char *));
-        int result = runsinglecmd(arg, totalnumarg, totalnumrd, rd, temp, jobgroup, numjob, command);
-        free(command);
+        singlecommand = (char **)malloc((totalnumarg-totalnumrd+1) * sizeof(char *));
+        int result = runsinglecmd(arg, totalnumarg, totalnumrd, rd, temp, jobgroup, numjob, singlecommand);
+        free(singlecommand);
         return result;
     }
 
@@ -562,10 +567,8 @@ int main() {
             free(arg[i]);
         }
         free(arg);
+        free(singlecommand);
     }
-    //free(arg);
-    /*if(numarg != 0){
-    }*/
 
     while(1){
 
@@ -674,145 +677,7 @@ int main() {
         free(arg);
 
     }
-
-     //char line[MAXCHAC+1]; input; +1 to ensure the last element of line is '\0'
-
-    /*struct job jobgroup[MAXJOB];
-    int numjob = 0;
-    init(jobgroup);
-
-    mainpid = getpid();
-    setpgid(0, 0);
-
-    signal(SIGINT, sigint_handler);
-
-    int numarg = 0;
-    char **arg = (char **)malloc(sizeof(char *));
-
-    while(1){
-
-        sigsetjmp(env, 1);
-
-        for(int i=0; i<numarg; i++){
-            free(arg[i]);
-        }
-        free(arg);
-
-        printf("mumsh $ ");
-        fflush(stdout);
-
-        char line[MAXCHAC+1];
-        for(int i=0; i<MAXCHAC+1; i++){
-            line[i] = '\0';
-        }
-        char tempchar;
-        int cntchar = 0;
-        while((tempchar = (char)fgetc(stdin)) != '\n'){
-            if(tempchar == EOF){
-                if(line[0] != '\0') continue;
-                else{
-                    printf("exit\n");
-                    fflush(stdout);
-                    return 0;
-                }
-            }
-            line[cntchar] = tempchar;
-            cntchar++;
-        }
-        line[cntchar] = '\n';
-
-        if(strncmp(line, "exit", 4) == 0 && line[4] == '\n'){
-            printf("exit\n");
-            fflush(stdout);
-            break;
-        }
-
-        if(strncmp(line, "jobs", 4) == 0 && line[4] == '\n'){
-            printbackgroundjob(numjob, jobgroup);
-            continue;
-        }
-
-        if(line[0] == '\n') continue;
-
-        numarg = 0;
-        arg = (char **)malloc(sizeof(char *)); //first assign one argument
-        arg[0] = (char *)calloc(MAXCINW, sizeof(char)); //suppose #characters of a word will not exceed MAXCINW
-        int numrd = 0;
-        struct redirectsymbol rd[MAXREDIRECTION];
-        int numcm = 0;
-        struct cmdinfo cmd[MAXPIPELINE];
-
-        struct job temp;
-        initjob(&temp);
-        for(int i = 0; i < MAXCHAC+1; i++){
-            temp.content[i] = line[i];
-        }
-        temp.jobid = numjob+1;
-        if(line[cntchar-1] == '&'){
-            line[cntchar] = '\0';
-            line[cntchar-1] = '\n'; // remove '&' for background job
-            temp.forb = BG;
-        }
-        else{
-            temp.forb = FG;
-        }
-        temp.numpid = 0; // default
-
-
-
-        arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd);
-        free(arg[numarg]);
-        arg[numarg] = NULL;
-
-        if(strcmp(arg[0], "cd") == 0 && numcm == 0 && numrd == 0){
-            if(numarg > 2){
-                printf("Too many arguments for cd.\n");
-                fflush(stdout);
-            }
-            else if(numarg < 2){
-                printf("Too few arguments for cd.\n");
-                fflush(stdout);
-            }
-            else{
-                if(chdir(arg[1]) < 0){
-                    printf("Cannot change to directory \"%s\".\n", arg[1]);
-                    fflush(stdout);
-                }
-            }
-        }
-        else{
-            execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp, jobgroup, numjob);
-            if(temp.forb == BG){
-                printf("[%d] ", temp.jobid);
-                fflush(stdout);
-                for(int i = 0; i<temp.numpid; i++){
-                    printf("(%d) ", temp.pid[i]);
-                    fflush(stdout);
-                }
-                printf("%s", temp.content);
-                fflush(stdout);
-            }
-            jobgroup[numjob] = temp;
-            numjob = (numjob+1) % MAXJOB;
-        }
-
-
-        //printf("%d", numarg);
-
-    }*/
-
-    //free(arg);
 
     return 0;
 }
 
-/*for(int i = 0; i < numcm; i++){
-            printf("pos: %d ", cmd[i].cmdpos);
-            printf("rd: %d ", cmd[i].cmdnumrd);
-        }*/
-
-/*for(int i=0; i<numrd; i++){
-    printf("rd%d ", rd[i].pos);
-}*/
-
-/*printf("numrd%d", numrd);*/
