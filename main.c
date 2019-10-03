@@ -19,7 +19,10 @@ enum{ROUT, ROUTA, RIN}; // >, >>, <
 struct redirectsymbol{
     int pos; // after which argument in this command
     int symbol; // >, >>, <
+    int poscmd; // which command it is in
 };
+
+char *rdsymbol[3] = {">", ">>", "<"};
 
 enum{FG, BG};
 
@@ -60,7 +63,7 @@ void proc_sigint_handler()
 }
 
 char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirectsymbol *rd,
-        int *numcm, struct cmdinfo *cmd)
+        int *numcm, struct cmdinfo *cmd, int *error)
 // REQUIRES: *numcm = *numarg = 0
 // EFFECTS: separate line into arg[] according to white space;
 //          numcm records the number of command;
@@ -76,10 +79,19 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         while(line[i] == ' ') i++;
 
         if(line[i] == '>'){
+            if((*numrd) > 0 && rd[(*numrd)-1].poscmd == (*numcm)
+                && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)){
+                printf("syntax error near unexpected token \'%c\'\n", '>');
+                fflush(stdout);
+                *error = 1;
+                break;
+            }
+
             if(i<(MAXCHAC+2) && line[i+1]=='>'){
                 struct redirectsymbol temp;
                 temp.pos=(*numarg) - lastcmdpos;
                 temp.symbol=ROUTA;
+                temp.poscmd = (*numcm);
                 rd[*numrd] = temp;
                 (*numrd)++;
                 i++;
@@ -88,6 +100,7 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
                 struct redirectsymbol temp;
                 temp.pos=(*numarg) - lastcmdpos;
                 temp.symbol=ROUT;
+                temp.poscmd = (*numcm);
                 rd[*numrd] = temp;
                 (*numrd)++;
             }
@@ -95,9 +108,18 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
             continue;
         }
         else if(line[i] == '<'){
+            if((*numrd) > 0 && rd[(*numrd)-1].poscmd == (*numcm)
+               && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)){
+                printf("syntax error near unexpected token \'%c\'\n", '<');
+                fflush(stdout);
+                *error = 1;
+                break;
+            }
+
             struct redirectsymbol temp;
             temp.pos=(*numarg) - lastcmdpos;
             temp.symbol=RIN;
+            temp.poscmd = (*numcm);
             rd[*numrd] = temp;
             (*numrd)++;
             i++;
@@ -107,8 +129,16 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         while(line[i] == ' ') i++;
 
         if(line[i] == '|'){
+            if((*numrd)>0 && rd[(*numrd)-1].poscmd == (*numcm)
+                && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)){
+                printf("syntax error near unexpected token \'%c\'\n", '|');
+                fflush(stdout);
+                *error = 1;
+                break;
+            }
+
             struct cmdinfo temp;
-            temp.cmdpos = *numarg;
+            //temp.cmdpos = *numarg;
             lastcmdpos = temp.cmdpos = *numarg;
             temp.cmdnumrd = *numrd;
             cmd[*numcm] = temp;
@@ -119,12 +149,14 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
 
         if(line[i] == '\n') {
             int whetherbreak = 0;
-            if((*numrd) > 0 && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)) whetherbreak = 1;
+            if((*numrd) > 0 && rd[(*numrd)-1].poscmd == (*numcm) && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)) whetherbreak = 1;
             if((*numcm) > 0 && cmd[(*numcm)-1].cmdpos == (*numarg)){
                 whetherbreak = 1;
             }
             if(whetherbreak){
                 i = 0;
+                printf("> ");
+                fflush(stdout);
                 while(fgets(line, MAXCHAC+1, stdin) == NULL){}
                 continue;
             }
@@ -132,56 +164,60 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         }
 
         int j=0;
-        if(line[i] == '"') {
-            i++;
-            while(line[i] != '"') {
-                if(line[i] == '\\'){
-                    if(line[i+1] == '\'' || line[i+1] == '\"' || line[i+1] == '$' || line[i+1] == '\\'){
-                        i++;
-                    }
-                }
-                if(line[i] == '\n'){
-                    arg[*numarg][j]=line[i];
-                    j++;
-                    i = 0;
-                    while(fgets(line, MAXCHAC+1, stdin) == NULL){} // must be wrong!!!!!!!!!!!!!!!!!!!!!!!!
-                    continue;
-                }
-                arg[*numarg][j]=line[i];
-                j++;
-                i++;
-            }
-            i++; //skip the last "
-            arg[*numarg][j] = '\0';
-            (*numarg)++;
-            arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
-            arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));
-            continue;
-        }
-        if(line[i] == '\'') {
-            i++;
-            while(line[i] != '\'') {
-                if(line[i] == '\n'){
-                    arg[*numarg][j]=line[i];
-                    j++;
-                    i = 0;
-                    fgets(line, MAXCHAC+1, stdin);
-                    continue;
-                }
-                arg[*numarg][j]=line[i];
-                j++;
-                i++;
-            }
-            i++; //skip the last '
-            arg[*numarg][j] = '\0';
-            (*numarg)++;
-            arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
-            arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));
-            continue;
-        }
-
         while(line[i] != ' ' && line[i] != '>' && line[i] != '<'
-            && line[i] != '|' && line[i] != '\'' && line[i] != '\"' && line[i] != '\n'){
+            && line[i] != '|' && line[i] != '\n'){
+
+            if(line[i] == '\"') {
+                i++;
+                while(line[i] != '\"') {
+                    if(line[i] == '\\'){
+                        if(line[i+1] == '\'' || line[i+1] == '\"' || line[i+1] == '$' || line[i+1] == '\\'){
+                            i++;
+                        }
+                    }
+                    if(line[i] == '\n'){
+                        arg[*numarg][j]=line[i];
+                        j++;
+                        i = 0;
+                        printf("> ");
+                        fflush(stdout);
+                        while(fgets(line, MAXCHAC+1, stdin) == NULL){} // must be wrong!!!!!!!!!!!!!!!!!!!!!!!!
+                        continue;
+                    }
+                    arg[*numarg][j]=line[i];
+                    j++;
+                    i++;
+                }
+                i++; //skip the last "
+                /*arg[*numarg][j] = '\0';
+                (*numarg)++;
+                arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
+                arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));*/
+                continue;
+            }
+            if(line[i] == '\'') {
+                i++;
+                while(line[i] != '\'') {
+                    if(line[i] == '\n'){
+                        arg[*numarg][j]=line[i];
+                        j++;
+                        i = 0;
+                        printf("> ");
+                        fflush(stdout);
+                        fgets(line, MAXCHAC+1, stdin);
+                        continue;
+                    }
+                    arg[*numarg][j]=line[i];
+                    j++;
+                    i++;
+                }
+                i++; //skip the last '
+                /*arg[*numarg][j] = '\0';
+                (*numarg)++;
+                arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
+                arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));*/
+                continue;
+            }
             arg[*numarg][j]=line[i];
             j++;
             i++;
@@ -215,12 +251,12 @@ int execbuiltin(char **cmd, int numarg){
             fprintf(stderr, "Too many arguments for cd.\n");
         }
         else if(numarg < 2){
-            fprintf(stderr, "Too few arguments for cd.\n");
-            fflush(stdout);
+            char *home = getenv("HOME");
+            chdir(home);
         }
         else{
             if(chdir(cmd[1]) < 0){
-                fprintf(stderr, "Cannot change to directory \"%s\".\n", cmd[1]);
+                fprintf(stderr, "%s: No such file or directory\n", cmd[1]);
                 fflush(stdout);
             }
         }
@@ -241,18 +277,14 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
         command[numcom] = arg[countarg++];
     }
 
+    int countin = 0;
     for(int i=0; i<numrd; i++){
-        if(rd[i].pos>=numarg || (rd[i].pos<numarg && arg[rd[i].pos][0] == '\0')){
-            printf("Lack file to redirect.\n");
-            fflush(stdout);
-            return 1;
-        }
         if(rd[i].symbol == ROUT){
             int fp = open(arg[rd[i].pos], O_CREAT|O_WRONLY|O_TRUNC, 0644);
             if(fp < 0){
-                printf("Cannot open file %s", arg[rd[i].pos]);
+                printf("%s: Permission denied\n", arg[rd[i].pos]);
                 fflush(stdout);
-                return 1;
+                return -1;
             }
             int fd = dup2(fp, STDOUT_FILENO);
             if(fd<0){
@@ -264,9 +296,9 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
         else if(rd[i].symbol == ROUTA){
             int fp = open(arg[rd[i].pos], O_WRONLY|O_CREAT|O_APPEND, 0644);
             if(fp < 0){
-                printf("Cannot open file %s", arg[rd[i].pos]);
+                printf("%s: Permission denied\n", arg[rd[i].pos]);
                 fflush(stdout);
-                return 1;
+                return -1;
             }
             int fd = dup2(fp, STDOUT_FILENO);
             if(fd<0){
@@ -276,11 +308,12 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
             close(fp);
         }
         else{
-            int fp = open(arg[rd[i].pos], O_CREAT|O_RDONLY, 0644);
+            countin++;
+            int fp = open(arg[rd[i].pos], O_RDONLY, 0644);
             if(fp < 0){
-                printf("Cannot open file %s", arg[rd[i].pos]);
+                printf("%s: No such file or directory\n", arg[rd[i].pos]);
                 fflush(stdout);
-                return 1;
+                return -1;
             }
             int fd = dup2(fp, STDIN_FILENO);
             if(fd<0){
@@ -292,6 +325,11 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
         for(int j=rd[i].pos+1; j < rd[i+1].pos; j++){
             command[numcom++] = arg[j];
         }
+    }
+    if(countin > 1){
+        printf("error: duplicated input redirection\n");
+        fflush(stdout);
+        exit(1);
     }
 
     command[numcom] = NULL;
@@ -305,7 +343,7 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
     }
     else{
         if(execvp(command[0], command)<0){
-            printf("Cannot execute \"%s\"!\n", command[0]);
+            printf("%s: command not found\n", command[0]);
             fflush(stdout);
             //free(command);
             exit(0);
@@ -314,12 +352,15 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
 
     //free(command);
 
-    return 0;
+    return countin;
 }
 
 int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, struct job *temp,
                  struct job *jobgroup, int numjob, char **command)
 {
+    int recordin = dup(STDIN_FILENO);
+    int recordout = dup(STDOUT_FILENO);
+    int numinrd = 0;
     pid_t child;
     child = fork();
     if(child == -1) {
@@ -328,12 +369,16 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
         return 1;
     }
     if(child != 0){
-        temp->pid[0] = child;
-        temp->numpid = 1;
-        jobgroup[numjob] = *temp;
+        if(temp->forb == BG){
+            temp->pid[0] = child;
+            temp->numpid = 1;
+            jobgroup[numjob] = *temp;
+        }
 
         if(temp->forb == FG){
-            waitpid(child, &temp->state[0], 0);
+            int status;
+            waitpid(child, &status, 0);
+            //waitpid(child, &temp->state[0], 0);
         }
         else{
             int status;
@@ -351,15 +396,21 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
             } // builtin
             else{
                 if(execvp(arg[0], arg)<0){
-                    printf("Cannot execute \"%s\"!\n", arg[0]);
+                    printf("%s: command not found\n", arg[0]);
                     fflush(stdout);
                     exit(0);
                 }
             }
         }
         else{
-            execwithrd(arg, command, numarg, numrd, rd);
+            numinrd = execwithrd(arg, command, numarg, numrd, rd);
         }
+    }
+    dup2(recordin, STDIN_FILENO);
+    dup2(recordout, STDOUT_FILENO);
+    if(numinrd >= 0 && (numrd - numinrd) > 1){
+        printf("error: duplicated output redirection\n");
+        fflush(stdout);
     }
     return 0;
 }
@@ -374,21 +425,41 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
     int cntarg = 0;
     int cntrd = 0;
     if(currentnumcm == 0){
+        for(int i = 0; i < cmd[currentnumcm].cmdnumrd; i++){
+            newrd[cntrd++] = rd[i];
+        }
+        if(cntrd > 1 || (cntrd == 1 && (newrd[0].symbol == ROUT || newrd[0].symbol == ROUTA))){
+            printf("error: duplicated output redirection\n");
+            fflush(stdout);
+            return 1;
+        }
+
         newarg =  (char **)malloc((cmd[currentnumcm].cmdpos+1) * sizeof(char *));
         for(int i = 0; i < cmd[currentnumcm].cmdpos; i++){
             newarg[cntarg++] = arg[i];
         }
-        for(int i = 0; i < cmd[currentnumcm].cmdnumrd; i++){
-            newrd[cntrd++] = rd[i];
-        }
     }
     else{
+        for(int i = cmd[currentnumcm-1].cmdnumrd; i < cmd[currentnumcm].cmdnumrd; i++){
+            newrd[cntrd++] = rd[i];
+        }
+        if(currentnumcm == totalnumcm){
+            if(cntrd > 1 || (cntrd == 1 && newrd[0].symbol == RIN)){
+                printf("error: duplicated input redirection\n");
+                fflush(stdout);
+                return 1;
+            }
+        }
+
+        if(cmd[currentnumcm].cmdpos == cmd[currentnumcm-1].cmdpos){
+            printf("error: missing program\n");
+            fflush(stdout);
+            return 1;
+        }
+
         newarg = (char **)malloc((cmd[currentnumcm].cmdpos-cmd[currentnumcm-1].cmdpos+1) * sizeof(char *));
         for(int i = cmd[currentnumcm-1].cmdpos; i < cmd[currentnumcm].cmdpos; i++){
             newarg[cntarg++] = arg[i];
-        }
-        for(int i = cmd[currentnumcm-1].cmdnumrd; i < cmd[currentnumcm].cmdnumrd; i++){
-            newrd[cntrd++] = rd[i];
         }
     }
     newarg[cntarg] = NULL;
@@ -425,7 +496,7 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
             } // builtin
             else{
                 if(execvp(newarg[0], newarg)<0){
-                    printf("Cannot execute \"%s\"!\n", newarg[0]);
+                    printf("%s: command not found\n", newarg[0]);
                     fflush(stdout);
                     exit(0);
                 }
@@ -438,8 +509,10 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
     else{
         signal(SIGINT, proc_sigint_handler);
 
-        temp->pid[currentnumcm] = pid;
-        jobgroup[numjob] = *temp;
+        if(temp->forb == BG){
+            temp->pid[currentnumcm] = pid;
+            jobgroup[numjob] = *temp;
+        }
 
         if(totalnumcm != currentnumcm){
             close(fds[1]);
@@ -449,9 +522,9 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
         execwithpipe_helper(arg, totalnumcm, currentnumcm+1, rd, cmd, temp, jobgroup, numjob);
 
         if(temp->forb == FG){
-            //int status;
-            //waitpid(pid, &status, 0);
-            waitpid(pid, &temp->state[currentnumcm], 0);
+            int status;
+            waitpid(pid, &status, 0);
+            //waitpid(pid, &temp->state[currentnumcm], 0);
         }
         else{
             waitpid(pid, &temp->state[currentnumcm], WNOHANG);
@@ -477,8 +550,10 @@ int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
     last.cmdpos = totalnumarg;
     cmd[totalnumcm] = last;
 
-    temp->numpid = totalnumcm+1;
-    jobgroup[numjob] = *temp;
+    if(temp->forb == BG){
+        temp->numpid = totalnumcm+1;
+        jobgroup[numjob] = *temp;
+    }
 
     if(totalnumcm == 0){
         singlecommand = (char **)malloc((totalnumarg-totalnumrd+1) * sizeof(char *));
@@ -633,43 +708,44 @@ int main() {
         }
         temp.numpid = 0; // default
 
-        arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd);
+        int errorinparse = 0;
+        arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd, &errorinparse);
         free(arg[numarg]);
         arg[numarg] = NULL;
 
-        if(strcmp(arg[0], "cd") == 0 && numcm == 0 && numrd == 0){
-            if(numarg > 2){
-                printf("Too many arguments for cd.\n");
-                fflush(stdout);
-            }
-            else if(numarg < 2){
-                printf("Too few arguments for cd.\n");
-                fflush(stdout);
+        if(!errorinparse){
+            if(strcmp(arg[0], "cd") == 0 && numcm == 0 && numrd == 0){
+                if(numarg > 2){
+                    printf("Too many arguments for cd.\n");
+                    fflush(stdout);
+                }
+                else if(numarg < 2){
+                    char *home = getenv("HOME");
+                    chdir(home);
+                }
+                else{
+                    if(chdir(arg[1]) < 0){
+                        printf("%s: No such file or directory\n", arg[1]);
+                        fflush(stdout);
+                    }
+                }
             }
             else{
-                if(chdir(arg[1]) < 0){
-                    printf("Cannot change to directory \"%s\".\n", arg[1]);
+                execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp, jobgroup, numjob);
+                if(temp.forb == BG){
+                    printf("[%d] ", temp.jobid);
                     fflush(stdout);
+                    for(int i = 0; i<temp.numpid; i++){
+                        printf("(%d) ", temp.pid[i]);
+                        fflush(stdout);
+                    }
+                    printf("%s", temp.content);
+                    fflush(stdout);
+                    jobgroup[numjob] = temp;
+                    numjob = (numjob+1) % MAXJOB;
                 }
             }
         }
-        else{
-            execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp, jobgroup, numjob);
-            if(temp.forb == BG){
-                printf("[%d] ", temp.jobid);
-                fflush(stdout);
-                for(int i = 0; i<temp.numpid; i++){
-                    printf("(%d) ", temp.pid[i]);
-                    fflush(stdout);
-                }
-                printf("%s", temp.content);
-                fflush(stdout);
-            }
-            jobgroup[numjob] = temp;
-            numjob = (numjob+1) % MAXJOB;
-        }
-
-
 
         for(int i=0; i<numarg; i++){
             free(arg[i]);
