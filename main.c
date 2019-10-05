@@ -81,7 +81,7 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         if(line[i] == '>'){
             if((*numrd) > 0 && rd[(*numrd)-1].poscmd == (*numcm)
                 && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)){
-                printf("syntax error near unexpected token \'%c\'\n", '>');
+                printf("syntax error near unexpected token `%c\'\n", '>');
                 fflush(stdout);
                 *error = 1;
                 break;
@@ -110,7 +110,7 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         else if(line[i] == '<'){
             if((*numrd) > 0 && rd[(*numrd)-1].poscmd == (*numcm)
                && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)){
-                printf("syntax error near unexpected token \'%c\'\n", '<');
+                printf("syntax error near unexpected token `%c\'\n", '<');
                 fflush(stdout);
                 *error = 1;
                 break;
@@ -131,8 +131,14 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
         if(line[i] == '|'){
             if((*numrd)>0 && rd[(*numrd)-1].poscmd == (*numcm)
                 && rd[(*numrd)-1].pos + lastcmdpos == (*numarg)){
-                printf("syntax error near unexpected token \'%c\'\n", '|');
+                printf("syntax error near unexpected token `%c\'\n", '|');
                 fflush(stdout);
+                *error = 1;
+                break;
+            }
+
+            if((*numcm) > 0 && cmd[(*numcm)-1].cmdpos == (*numarg)){
+                fprintf(stderr, "error: missing program\n");
                 *error = 1;
                 break;
             }
@@ -273,18 +279,18 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
 
     int numcom=0;
     int countarg=0;
+    int numinrd=0;
     for(numcom=0; numcom<rd[0].pos; numcom++){
         command[numcom] = arg[countarg++];
     }
 
-    int countin = 0;
     for(int i=0; i<numrd; i++){
         if(rd[i].symbol == ROUT){
             int fp = open(arg[rd[i].pos], O_CREAT|O_WRONLY|O_TRUNC, 0644);
             if(fp < 0){
                 printf("%s: Permission denied\n", arg[rd[i].pos]);
                 fflush(stdout);
-                return -1;
+                exit(1);
             }
             int fd = dup2(fp, STDOUT_FILENO);
             if(fd<0){
@@ -298,7 +304,7 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
             if(fp < 0){
                 printf("%s: Permission denied\n", arg[rd[i].pos]);
                 fflush(stdout);
-                return -1;
+                exit(1);
             }
             int fd = dup2(fp, STDOUT_FILENO);
             if(fd<0){
@@ -308,12 +314,12 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
             close(fp);
         }
         else{
-            countin++;
+            numinrd++;
             int fp = open(arg[rd[i].pos], O_RDONLY, 0644);
             if(fp < 0){
                 printf("%s: No such file or directory\n", arg[rd[i].pos]);
                 fflush(stdout);
-                return -1;
+                exit(1);
             }
             int fd = dup2(fp, STDIN_FILENO);
             if(fd<0){
@@ -326,8 +332,13 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
             command[numcom++] = arg[j];
         }
     }
-    if(countin > 1){
-        printf("error: duplicated input redirection\n");
+    if(numinrd >= 0 && (numrd - numinrd) > 1){
+        fprintf(stderr, "error: duplicated output redirection\n");
+        fflush(stdout);
+        exit(1);
+    }
+    if(numinrd > 1){
+        fprintf(stderr, "error: duplicated input redirection\n");
         fflush(stdout);
         exit(1);
     }
@@ -352,7 +363,7 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
 
     //free(command);
 
-    return countin;
+    return 0;
 }
 
 int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, struct job *temp,
@@ -360,7 +371,6 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
 {
     int recordin = dup(STDIN_FILENO);
     int recordout = dup(STDOUT_FILENO);
-    int numinrd = 0;
     pid_t child;
     child = fork();
     if(child == -1) {
@@ -403,15 +413,11 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
             }
         }
         else{
-            numinrd = execwithrd(arg, command, numarg, numrd, rd);
+            execwithrd(arg, command, numarg, numrd, rd);
         }
     }
     dup2(recordin, STDIN_FILENO);
     dup2(recordout, STDOUT_FILENO);
-    if(numinrd >= 0 && (numrd - numinrd) > 1){
-        printf("error: duplicated output redirection\n");
-        fflush(stdout);
-    }
     return 0;
 }
 
@@ -451,11 +457,11 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
             }
         }
 
-        if(cmd[currentnumcm].cmdpos == cmd[currentnumcm-1].cmdpos){
+        /*if(cmd[currentnumcm].cmdpos == cmd[currentnumcm-1].cmdpos){
             printf("error: missing program\n");
             fflush(stdout);
             return 1;
-        }
+        }*/
 
         newarg = (char **)malloc((cmd[currentnumcm].cmdpos-cmd[currentnumcm-1].cmdpos+1) * sizeof(char *));
         for(int i = cmd[currentnumcm-1].cmdpos; i < cmd[currentnumcm].cmdpos; i++){
@@ -735,10 +741,10 @@ int main() {
                 if(temp.forb == BG){
                     printf("[%d] ", temp.jobid);
                     fflush(stdout);
-                    for(int i = 0; i<temp.numpid; i++){
+                    /*for(int i = 0; i<temp.numpid; i++){
                         printf("(%d) ", temp.pid[i]);
                         fflush(stdout);
-                    }
+                    }*/
                     printf("%s", temp.content);
                     fflush(stdout);
                     jobgroup[numjob] = temp;
