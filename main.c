@@ -13,6 +13,7 @@
 #define MAXREDIRECTION 24 // maximum #redirection
 #define MAXDIRLENGTH 100 // maximum current directory length
 #define MAXJOB 128 // maximum #job
+#define MAXARGINCMD 48 // maximum #arguments in a command
 
 enum{ROUT, ROUTA, RIN}; // >, >>, <
 
@@ -22,20 +23,18 @@ struct redirectsymbol{
     int poscmd; // which command it is in
 };
 
-char *rdsymbol[3] = {">", ">>", "<"};
-
 enum{FG, BG};
 
 struct job{
     int jobid;
     pid_t pid[MAXPIPELINE];
     int numpid;
-    int forb;
+    int forb; // fore ground or back ground
     int state[MAXPIPELINE]; // whether it is running or done
     char content[MAXCHAC+1];
 };
 
-pid_t mainpid;
+pid_t mainpid; // process id of main
 jmp_buf env;
 char **arg;
 int numarg = 0;
@@ -47,30 +46,22 @@ struct cmdinfo{
 
 void sigint_handler()
 {
-    /*if(numarg != 0){
-        for(int i = 0; i < numarg; i++){
-            free(arg[i]);
-        }
-        free(arg);
-    }*/
     printf("\n");
-    siglongjmp(env, 1);
-}
-
-void proc_sigint_handler()
-{
-    printf("\n");
+    siglongjmp(env, 2);
 }
 
 char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirectsymbol *rd,
         int *numcm, struct cmdinfo *cmd, int *error)
-// REQUIRES: *numcm = *numarg = 0
-// EFFECTS: separate line into arg[] according to white space;
-//          numcm records the number of command;
-//          cmpos[a] records which argument the ath command is up to,
-//          i. e. command a is arg[cmpos[a-1]] ~ arg[cmpos[a]-1].
-//          return arg.
-//NO REDIRECTION & NO CONSIDERING INCOMPLETE QUOTES
+/*
+ * REQUIRES: *numcm = *numarg = 0
+ * EFFECTS: separate line into arg[] according to white space;
+ *          *numarg records the total number of arguments;
+ *          *numrd records the total number of redirection;
+ *          *rd records the position and symbol of redirection;
+ *          *numcm records the number of commands;
+ *          *cmd records the position and number of redirections of each command
+ *          return arg.
+ */
 {
     int i=0;
     int lastcmdpos = 0;
@@ -144,7 +135,6 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
             }
 
             struct cmdinfo temp;
-            //temp.cmdpos = *numarg;
             lastcmdpos = temp.cmdpos = *numarg;
             temp.cmdnumrd = *numrd;
             cmd[*numcm] = temp;
@@ -187,7 +177,7 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
                         i = 0;
                         printf("> ");
                         fflush(stdout);
-                        while(fgets(line, MAXCHAC+1, stdin) == NULL){} // must be wrong!!!!!!!!!!!!!!!!!!!!!!!!
+                        while(fgets(line, MAXCHAC+1, stdin) == NULL){}
                         continue;
                     }
                     arg[*numarg][j]=line[i];
@@ -195,10 +185,6 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
                     i++;
                 }
                 i++; //skip the last "
-                /*arg[*numarg][j] = '\0';
-                (*numarg)++;
-                arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
-                arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));*/
                 continue;
             }
             if(line[i] == '\'') {
@@ -218,10 +204,6 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
                     i++;
                 }
                 i++; //skip the last '
-                /*arg[*numarg][j] = '\0';
-                (*numarg)++;
-                arg = (char **) realloc(arg, ((*numarg)+1) * sizeof(char *));
-                arg[(*numarg)] = (char *)calloc(MAXCINW, sizeof(char));*/
                 continue;
             }
             arg[*numarg][j]=line[i];
@@ -240,7 +222,11 @@ char ** parse(char *line, char ** arg, int *numarg, int *numrd, struct  redirect
 
 }
 
-int execbuiltin(char **cmd, int numarg){
+int execbuiltin(char **cmd, int numarg)
+/*
+ * EFFECTS: execute the built-in command
+ */
+{
     if(strcmp(cmd[0], "pwd")==0){
         char dir[MAXDIRLENGTH];
         if(getcwd(dir, sizeof(dir)) == NULL){
@@ -271,7 +257,13 @@ int execbuiltin(char **cmd, int numarg){
     return 0;
 }
 
-int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirectsymbol *rd){
+int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirectsymbol *rd)
+/*
+ *  REQUIRES: numrd > 0, i.e. there are redirections in this command
+ *  EFFECTS: redirect the redirection file and remove them from 'arg';
+ *           and copy the remaining arguments to 'command'; then execute 'command'.
+ */
+{
     struct redirectsymbol last;
     last.symbol = 0; // default
     last.pos = numarg;
@@ -348,26 +340,26 @@ int execwithrd(char **arg, char **command, int numarg, int numrd, struct redirec
     // built-in
     if(strcmp(command[0], "pwd") == 0 || strcmp(command[0], "cd") == 0) {
         execbuiltin(command, numcom);
-        //execbuiltin(command);
-        //free(command);
         exit(0);
     }
     else{
         if(execvp(command[0], command)<0){
             printf("%s: command not found\n", command[0]);
             fflush(stdout);
-            //free(command);
             exit(0);
         }
     }
-
-    //free(command);
 
     return 0;
 }
 
 int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, struct job *temp,
                  struct job *jobgroup, int numjob, char **command)
+/*
+ * REQUIRES: there is no pipeline in the command stored in 'arg'
+ * EFFECTS: execute the command in 'arg';
+ *          update 'jobgroup' and numjob if it is a background job
+ */
 {
     int recordin = dup(STDIN_FILENO);
     int recordout = dup(STDOUT_FILENO);
@@ -388,7 +380,6 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
         if(temp->forb == FG){
             int status;
             waitpid(child, &status, 0);
-            //waitpid(child, &temp->state[0], 0);
         }
         else{
             int status;
@@ -400,8 +391,6 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
         if(numrd == 0){
             if(strcmp(arg[0], "pwd") == 0 || strcmp(arg[0], "cd") == 0){
                 execbuiltin(arg,numarg);
-                //execbuiltin(arg);
-                //free(command);
                 exit(0);
             } // builtin
             else{
@@ -423,10 +412,13 @@ int runsinglecmd(char **arg, int numarg, int numrd, struct redirectsymbol *rd, s
 
 int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct redirectsymbol *rd,
         struct cmdinfo *cmd, struct job *temp, struct job *jobgroup, int numjob)
+/*
+ * EFFECTS: execute command with pipes in parallel
+ */
 {
     if(currentnumcm > totalnumcm) return 0;
 
-    char **newarg;
+    char *newarg[MAXARGINCMD];
     struct redirectsymbol newrd[MAXREDIRECTION];
     int cntarg = 0;
     int cntrd = 0;
@@ -440,7 +432,6 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
             return 1;
         }
 
-        newarg =  (char **)malloc((cmd[currentnumcm].cmdpos+1) * sizeof(char *));
         for(int i = 0; i < cmd[currentnumcm].cmdpos; i++){
             newarg[cntarg++] = arg[i];
         }
@@ -457,13 +448,6 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
             }
         }
 
-        /*if(cmd[currentnumcm].cmdpos == cmd[currentnumcm-1].cmdpos){
-            printf("error: missing program\n");
-            fflush(stdout);
-            return 1;
-        }*/
-
-        newarg = (char **)malloc((cmd[currentnumcm].cmdpos-cmd[currentnumcm-1].cmdpos+1) * sizeof(char *));
         for(int i = cmd[currentnumcm-1].cmdpos; i < cmd[currentnumcm].cmdpos; i++){
             newarg[cntarg++] = arg[i];
         }
@@ -479,7 +463,7 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
         }
     }
 
-    char **command = (char **)malloc((cntarg-cntrd+1) * sizeof(char *));
+    char *command[(cntarg-cntrd+1)];
     pid_t pid = vfork();
     if(pid == -1) {
         printf("Failed to fork\n");
@@ -497,7 +481,6 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
         if(cntrd == 0){
             if(strcmp(newarg[0], "pwd") == 0 || strcmp(newarg[0], "cd") == 0){
                 execbuiltin(newarg, cntarg);
-                //execbuiltin(arg);
                 exit(0);
             } // builtin
             else{
@@ -513,8 +496,6 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
         }
     }
     else{
-        signal(SIGINT, proc_sigint_handler);
-
         if(temp->forb == BG){
             temp->pid[currentnumcm] = pid;
             jobgroup[numjob] = *temp;
@@ -530,25 +511,20 @@ int execwithpipe_helper(char **arg, int totalnumcm, int currentnumcm, struct red
         if(temp->forb == FG){
             int status;
             waitpid(pid, &status, 0);
-            //waitpid(pid, &temp->state[currentnumcm], 0);
         }
         else{
             waitpid(pid, &temp->state[currentnumcm], WNOHANG);
         }
-
-        //printf("return code is %d\n",WEXITSTATUS(status));
-
     }
-    free(command);
-    free(newarg);
-
     return 0;
 }
 
-char **singlecommand;
-
 int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
         struct redirectsymbol *rd, struct cmdinfo *cmd, struct job *temp, struct job *jobgroup, int numjob)
+/*
+ * EFFECTS: execute the command stored in 'arg', which may contain both pipes and redirection
+ *          update 'temp', 'jobgroup' if it is a background job
+ */
 {
 
     struct cmdinfo last;
@@ -562,9 +538,8 @@ int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
     }
 
     if(totalnumcm == 0){
-        singlecommand = (char **)malloc((totalnumarg-totalnumrd+1) * sizeof(char *));
+        char *singlecommand[MAXARGINCMD];
         int result = runsinglecmd(arg, totalnumarg, totalnumrd, rd, temp, jobgroup, numjob, singlecommand);
-        free(singlecommand);
         return result;
     }
 
@@ -578,6 +553,9 @@ int execwithpipe(char **arg, int totalnumarg, int totalnumrd, int totalnumcm,
 }
 
 void initjob(struct job *tjob)
+/*
+ * EFFECTS: initialize a background job
+ */
 {
     for(int ii = 0; ii < MAXPIPELINE; ii++){
         tjob->pid[ii] = 0;
@@ -590,6 +568,9 @@ void initjob(struct job *tjob)
 }
 
 void init(struct job *jobgroup)
+/*
+ * EFFECTS: initialize all background jobs in 'jobgroup'
+ */
 {
     for(int i = 0; i < MAXJOB; i++){
         initjob(&(jobgroup[i]));
@@ -614,6 +595,9 @@ int isrunning(struct job tjob)
 }
 
 void printbackgroundjob(int numjob, struct job *jobgroup)
+/*
+ * EFFECTS: print information of background jobs in 'jobgroup' when command jobs is executed
+ */
 {
     for(int i = 0; i <= numjob; i++){
         if(jobgroup[i].forb == BG && jobgroup[i].pid[0] != 0){
@@ -634,6 +618,9 @@ void printbackgroundjob(int numjob, struct job *jobgroup)
 
 int main() {
 
+    int recordin = dup(STDIN_FILENO);
+    int recordout = dup(STDOUT_FILENO); // store the stdout and stdin
+
     struct job jobgroup[MAXJOB];
     int numjob = 0;
     init(jobgroup);
@@ -641,27 +628,33 @@ int main() {
     mainpid = getpid();
     setpgid(0, 0);
 
-    signal(SIGINT, sigint_handler);
-    sigsetjmp(env, 1);
-    if(numarg != 0){
-        for(int i = 0; i < numarg; i++){
-            free(arg[i]);
+    signal(SIGINT, sigint_handler); // handle ctrl+C
+
+    if(sigsetjmp(env, 1) == 2){
+        if(numarg > 0){
+            for(int i = 0; i < numarg; i++){
+                free(arg[i]);
+            }
+            free(arg);
         }
-        free(arg);
-        free(singlecommand);
-    }
+        dup2(recordin, STDIN_FILENO);
+        dup2(recordout, STDOUT_FILENO); // recover the stdout and stdin
+    } // if ctrl+C is pressed
 
     while(1){
 
         numarg = 0;
 
+        fflush(stdin);
         printf("mumsh $ ");
         fflush(stdout);
 
         char line[MAXCHAC+1];
         for(int i=0; i<MAXCHAC+1; i++){
             line[i] = '\0';
-        }
+        } // initialize the command line
+
+        // read the command line
         char tempchar;
         int cntchar = 0;
         while((tempchar = (char)fgetc(stdin)) != '\n'){
@@ -694,10 +687,11 @@ int main() {
         arg = (char **)malloc(sizeof(char *)); //first assign one argument
         arg[0] = (char *)calloc(MAXCINW, sizeof(char)); //suppose #characters of a word will not exceed MAXCINW
         int numrd = 0;
-        struct redirectsymbol rd[MAXREDIRECTION];
+        struct redirectsymbol rd[MAXREDIRECTION]; // information of redirections
         int numcm = 0;
-        struct cmdinfo cmd[MAXPIPELINE];
+        struct cmdinfo cmd[MAXPIPELINE]; // information of pipelines
 
+        // store background job information
         struct job temp;
         initjob(&temp);
         for(int i = 0; i < MAXCHAC+1; i++){
@@ -708,17 +702,24 @@ int main() {
             line[cntchar] = '\0';
             line[cntchar-1] = '\n'; // remove '&' for background job
             temp.forb = BG;
+
+            printf("[%d] ", temp.jobid);
+            fflush(stdout);
+            printf("%s", temp.content);
+            fflush(stdout);
         }
         else{
             temp.forb = FG;
         }
         temp.numpid = 0; // default
 
+        // parse the command
         int errorinparse = 0;
         arg = parse(line, arg, &numarg, &numrd, rd, &numcm, cmd, &errorinparse);
         free(arg[numarg]);
         arg[numarg] = NULL;
 
+        // execute the command
         if(!errorinparse){
             if(strcmp(arg[0], "cd") == 0 && numcm == 0 && numrd == 0){
                 if(numarg > 2){
@@ -739,14 +740,6 @@ int main() {
             else{
                 execwithpipe(arg, numarg, numrd, numcm, rd, cmd, &temp, jobgroup, numjob);
                 if(temp.forb == BG){
-                    printf("[%d] ", temp.jobid);
-                    fflush(stdout);
-                    /*for(int i = 0; i<temp.numpid; i++){
-                        printf("(%d) ", temp.pid[i]);
-                        fflush(stdout);
-                    }*/
-                    printf("%s", temp.content);
-                    fflush(stdout);
                     jobgroup[numjob] = temp;
                     numjob = (numjob+1) % MAXJOB;
                 }
